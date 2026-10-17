@@ -10,6 +10,7 @@
 #include "ord/ground_cache.hpp"
 #include "ord/lod_manager.hpp"
 #include "ord/presets.hpp"
+#include "ord/single_track.hpp"
 #include "ord/vehicle.hpp"
 #include "ord_test.hpp"
 #include "reference_vehicles.hpp"
@@ -74,4 +75,18 @@ TEST_CASE("alloc: TrafficSystem and LodManager frames do not allocate after warm
     const long long before = gAllocations.load();
     for (int f = 0; f < 600; ++f) lod.update(1.0 / 60, focus, g);  // steady state, same focus
     CHECK(gAllocations.load() - before == 0);
+}
+
+TEST_CASE("alloc: SingleTrack::step does not allocate (NoSlip and Tyre)") {
+    for (SingleTrackContact mode : {SingleTrackContact::NoSlip, SingleTrackContact::Tyre}) {
+        SingleTrack bike(meijaardBenchmark(), mode);
+        bike.reset(5.0, 0.05);
+        SingleTrackInput in;
+        in.steerTorque = 0.1;
+        bike.step(5e-4, in);
+        const long long before = gAllocations.load();
+        for (int i = 0; i < 400; ++i) bike.step(5e-4, in);
+        CHECK(gAllocations.load() - before == 0);
+        CHECK(!bike.faulted());
+    }
 }
