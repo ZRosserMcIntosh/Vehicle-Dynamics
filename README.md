@@ -49,6 +49,7 @@ any developer.
 | Vehicle range | FWD hatch, RWD sports, AWD saloon, 750 kg high-downforce race car (~1.7 g at 100 km/h → ~2.5 g at 250 km/h), ~476 km/h AWD hypercar | `tests/test_robustness.cpp` |
 | Regression guard | 13 headline metrics in `benchmarks/baseline.csv` with per-metric tolerances; changing them needs an explicit, reviewed regeneration | `tests/test_baseline.cpp` |
 | Tooling | Telemetry ring buffer + CSV, engine-agnostic debug draw (+SVG), `ordbench` report | `tools/ordbench` |
+| Two-wheelers (prototype) | **Benchmark bicycle**: nonlinear 4-body single-track multibody model (Whipple rolling contact + basic tyre mode). Validation only, not yet drivable ([plan](docs/architecture/two-wheelers.md)) | `tests/test_single_track.cpp` (Meijaard et al. 2007 weave/capsize speeds reproduced to ~1e-11 m/s) |
 | Unreal Engine 5 | Plugin `plugin/OpenRoadDynamics`: component, Chaos sim callback, game-thread ground prefetch, debug overlay. **Not compiled yet** | — |
 
 Selected results for the fictional 300 kW RWD reference car ([full report](docs/benchmarks/baseline-results.md)):
@@ -82,7 +83,7 @@ Requires CMake ≥ 3.20 and a C++20 compiler.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure      # 78 test cases
+ctest --test-dir build --output-on-failure      # 88 test cases
 ./build/ordbench                                # Markdown benchmark report
 ./build/ordbench --csv-dir /tmp/traces          # per-step telemetry CSV for plotting
 ./build/ordbench --write-baseline               # regenerate benchmarks/baseline.csv (reviewed changes only)
