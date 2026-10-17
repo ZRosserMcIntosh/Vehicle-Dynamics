@@ -15,3 +15,5 @@ sports_heave_hz,1.728162504,0.005
 sports_wheelhop_hz,13.6891203,0.005
 hatch_sim_0_100_s,8.625,0.01
 hatch_skidpad_r40_g,0.8613456501,0.01
+sports_drift_neutral_sideslip_deg,-19.61302232,0.05
+sports_drift_full_sideslip_deg,-31.66888585,0.05

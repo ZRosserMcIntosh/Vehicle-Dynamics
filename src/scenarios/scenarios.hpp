@@ -194,6 +194,21 @@ TransitionResult lodTransition(Real speedKmh = 70.0);
 // B22: symmetric undamped car, small heave impulse; measured vs analytic quarter-car modes.
 FrequencyResult suspensionFrequencies(const RunConfig& cfg);
 
+// Drift hold: handbrake entry into a left-hand slide at `entryKmh`, then constant inputs (the
+// steering held at `steerToward`, + = into the turn, and a fixed throttle) for `holdSeconds`.
+// With the drift assist on, measures how well the requested drift angle is held.
+struct DriftResult {
+    bool entered = false;          // the rear broke loose (drift assist engaged, or sideslip > 15 deg)
+    bool spun = false;             // sideslip beyond 80 deg or the car stopped
+    Real meanSideslip = 0;         // rad, after settling (2 s), sign as ISO sideslip
+    Real sdSideslip = 0;           // rad
+    Real meanTarget = 0;           // rad, drift assist target over the same window
+    Real maxThrottleAdded = 0;     // max(throttle out - driver throttle): must stay <= 0
+    int upshiftsWhileSliding = 0;  // automatic gearbox upshifts with the rear sliding and power on
+    Real endSpeedKmh = 0;
+};
+DriftResult driftHold(const RunConfig& cfg, Real steerToward, Real throttle, Real entryKmh = 50.0, Real holdSeconds = 10.0);
+
 // ---- Golden baseline (benchmarks/baseline.csv) ----
 // Key metrics that must not change silently. tests/test_baseline.cpp compares
 // them with the committed file; `ordbench --write-baseline FILE` regenerates it

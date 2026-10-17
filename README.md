@@ -30,7 +30,7 @@ any developer.
 
 ## Principles
 
-1. **One simulation, many experiences.** FUN, SPORT and SIMULATION are bundles of individually configurable aids. They never change tire grip or any other physics ([ADR-0002](docs/decisions/one-simulation-many-experiences.md)).
+1. **One simulation, many experiences.** FUN, SPORT, SIMULATION and DRIFT are bundles of individually configurable aids. They never change tire grip or any other physics ([ADR-0002](docs/decisions/one-simulation-many-experiences.md)).
 2. **Physics you can measure.** Every handling claim maps to a reproducible benchmark ([plan](docs/benchmarks/benchmark-plan.md), [current results](docs/benchmarks/baseline-results.md)).
 3. **Engine-independent core, thin engine adapter.** `src/core` has no engine headers, is deterministic, and doesn't allocate in the step ([ADR-0001](docs/decisions/physics-foundation.md)).
 4. **Clean provenance.** MIT, implemented from published mathematics. No engine source, no game data, no leaked material ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
@@ -42,7 +42,7 @@ any developer.
 | Tire | Reduced Pacejka Magic Formula: load sensitivity, combined slip, relaxation-length transient slip, standstill stiffness. **Parameter generator** from public tire size/category | `tests/test_tire.cpp` |
 | Contact & suspension | **Multi-point contact patch** (1/5/8/9 samples), **implicit unsprung-mass DOF** per corner, springs/dampers/ARB/bump stops, **procedural surface micro-texture** for paving | `tests/test_contact.cpp` (frequencies match the analytic quarter car to <0.1%) |
 | Drivetrain | Engine curve, governor, limiter, clutch, gearbox, open/locked/LSD diffs, AWD split, all solved implicitly with stick/slip friction | `tests/test_drivetrain.cpp` |
-| Assists | Speed-sensitive gamepad steering, ABS, TCS, ESC, countersteer aid, auto/manual shifting. Real actuators only; every intervention reported | `tests/test_assists.cpp` |
+| Assists | Speed-sensitive gamepad steering (full countersteer reachable in a slide), ABS, brake-based TCS, ESC, countersteer aid, **drift assist** (steering sets the drift angle; countersteer and throttle trim only), auto/manual shifting. Real actuators only; every intervention reported | `tests/test_assists.cpp` |
 | Lightness | **Ground prefetch cache** (per-frame adaptive strips; no scene queries from substeps or the physics thread), **vehicle-local substepping** inside a 60 Hz world, **host integration mode** for Chaos | `tests/test_contact.cpp`, `tests/test_host.cpp` |
 | Many vehicles | LOD1 nearby AI (`Vehicle` at low fidelity + lane-following driver), LOD2 kinematic traffic (IDM), `LodManager` with seamless promotion | `tests/test_lod.cpp` |
 | Robustness | Range validation of every definition field (incl. static-support and unsprung-mass sanity), `faulted()` runtime guard against non-finite state, fuzzed definitions, reversals, zero speed/reverse, contact loss, long-duration drift, determinism | `tests/test_robustness.cpp`, `tests/test_alloc.cpp` |

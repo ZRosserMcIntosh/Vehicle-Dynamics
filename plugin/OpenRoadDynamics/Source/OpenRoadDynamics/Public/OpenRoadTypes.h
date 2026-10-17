@@ -17,6 +17,8 @@ enum class EOpenRoadPreset : uint8
 	Fun,
 	Sport,
 	Simulation,
+	/** SPORT steering, no TCS/ESC, drift assist on (an aid with no real-car equivalent). */
+	Drift,
 };
 
 /** Input device; presets choose different steering interpretation per device. */
@@ -108,6 +110,12 @@ struct OPENROADDYNAMICS_API FOpenRoadAssistOverrides
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Assists", meta = (EditCondition = "bOverrideCountersteerAssist", ClampMin = "0.0", ClampMax = "1.0", ToolTip = "0..1. Driving aid with no real-car equivalent: blends the front wheels toward the direction of travel in slides."))
 	float CountersteerAssist = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Assists", meta = (InlineEditConditionToggle))
+	bool bOverrideDriftAssist = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Assists", meta = (EditCondition = "bOverrideDriftAssist", ClampMin = "0.0", ClampMax = "1.0", ToolTip = "0..1. Driving aid with no real-car equivalent: in a slide, steering sets the drift angle; the aid countersteers and trims throttle to hold it."))
+	float DriftAssist = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Assists", meta = (InlineEditConditionToggle))
 	bool bOverrideShiftMode = false;

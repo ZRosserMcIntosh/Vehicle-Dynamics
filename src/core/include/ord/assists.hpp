@@ -50,6 +50,13 @@ struct AssistConfig {
 
     // --- Driving aids that have no real-car equivalent (always labelled as such) ---
     Real countersteerAssist = 0.0;      // 0..1, blends front wheels toward the direction of travel in slides
+    // Drift assist, 0..1. Once the rear is sliding, the steering input sets the drift *angle*
+    // (body sideslip) instead of the road-wheel angle: centred holds driftAngleNeutral, into the
+    // turn widens toward driftAngleMax, against the turn straightens the car out. The aid
+    // countersteers and trims (never adds) throttle to hold that angle. Steering and throttle only.
+    Real driftAssist = 0.0;
+    Real driftAngleNeutral = 0.35;      // rad (~20 deg) held with the steering centred
+    Real driftAngleMax = 0.60;          // rad (~34 deg), further limited by the car's steering lock
 
     // --- Transmission ---
     ShiftMode shiftMode = ShiftMode::Automatic;
@@ -96,6 +103,10 @@ struct AssistReport {
     Real escYawError = 0;           // rad/s, measured - reference
     Real steerLimitAngle = 0;       // rad, active SpeedSensitive limit
     Real countersteerAngle = 0;     // rad added by the countersteer aid
+    bool driftActive = false;       // drift assist is steering the car
+    Real driftTargetSideslip = 0;   // rad, drift angle the assist is holding (sign: ISO sideslip)
+    Real driftSteerAngle = 0;       // rad, road-wheel angle change made by the drift assist
+    Real driftThrottleCut = 0;      // 0..1 fraction of throttle removed to stop an over-rotation
     bool shifting = false;
 };
 
@@ -109,7 +120,7 @@ public:
     // jumping. Physical aids switch immediately (no lingering effect).
     void setConfig(const AssistConfig& cfg) {
         if (cfg.steeringMode != cfg_.steeringMode || cfg.steeringExponent != cfg_.steeringExponent ||
-            cfg.targetFrontSlipAngle != cfg_.targetFrontSlipAngle) {
+            cfg.targetFrontSlipAngle != cfg_.targetFrontSlipAngle || (cfg.driftAssist > 0) != (cfg_.driftAssist > 0)) {
             steerBlend_ = 1.0;
             steerBlendFrom_ = lastSteerAngle_;
         }
@@ -130,6 +141,8 @@ private:
     void applyAbs(const DriverInput& in, const VehicleSensors& s, ActuatorCommands& cmd);
     void applyTcs(const VehicleSensors& s, ActuatorCommands& cmd);
     void applyEsc(const VehicleSensors& s, ActuatorCommands& cmd);
+    Real applyDriftSteer(Real angle, const VehicleSensors& s);
+    void applyDriftThrottle(const VehicleSensors& s, ActuatorCommands& cmd);
 
     AssistConfig cfg_;
     AssistReport report_;
@@ -144,6 +157,12 @@ private:
     Real shiftTimer_ = 0;
     Real shiftCooldown_ = 0;
     bool downshiftBlip_ = false;
+    Real driftWeight_ = 0;     // 0 -> 1 blend while the drift assist engages
+    Real driftDir_ = 0;        // +1 drifting left (yawing left), -1 right
+    Real driftCut_ = 0;        // throttle cut held by the drift assist
+    Real driftTarget_ = 0;     // rad, current target sideslip
+    Real driftI_ = 0;          // rad, integral of the drift-angle error (steering trim)
+    Real prevBeta_ = 0, betaRate_ = 0;  // body sideslip and its filtered rate
     std::array<Real, kMaxWheels> tcBrake_{};  // brake-based traction control, per wheel (N*m)  // rev-match the engine during the current downshift
 };
 

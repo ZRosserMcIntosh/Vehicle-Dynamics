@@ -5,7 +5,7 @@
 What you get:
 - A primitive RWD sports car: a box chassis, cube body and cylinder wheels animated from the simulation.
 - Keyboard and gamepad driving with an automatic gearbox.
-- Runtime presets FUN/SPORT/SIMULATION and ABS/TCS/ESC toggles.
+- Runtime presets FUN/SPORT/SIMULATION/DRIFT and ABS/TCS/ESC toggles.
 - Suspension that reacts to curbs and bumps, and Chaos collisions with cones and the ground.
 - Telemetry CSV capture, an on-screen readout, and two scripted parity manoeuvres.
 
@@ -98,7 +98,7 @@ Press **Play** (Selected Viewport), then click into the viewport.
 | Brake | S / Down | Left trigger |
 | Steer | A D / Left Right | Left stick X |
 | Handbrake | Space | B (face right) |
-| Preset FUN / SPORT / SIMULATION | 1 / 2 / 3 | D-pad left / up / right |
+| Preset FUN / SPORT / SIMULATION / DRIFT | 1 / 2 / 3 / 4 | D-pad left / up / right / — |
 | ABS on/off | B | X (face left) |
 | TCS off → sport → full | T | Y (face top) |
 | ESC off → sport → full | E | D-pad down |

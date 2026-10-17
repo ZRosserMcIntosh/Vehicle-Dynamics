@@ -24,7 +24,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 
 ## State buffer
 
-`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 32-value header, then 16 values per wheel.
+`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 36-value header, then 16 values per wheel.
 
 | Header | Meaning | Wheel | Meaning |
 |---|---|---|---|
@@ -38,5 +38,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 | 21–23 | time, wheel count, faulted | 9–10 | Fx, Fy (N) |
 | 24–26 | shifting, wheel-0 radius, clutch | 11–13 | contact, locked, ABS active |
 | 27–30 | steer/throttle/brake input, ground queries | 14–15 | ESC brake torque, surface id |
+| 31 | largest impact speed this frame (m/s, city world) | | |
+| 32–35 | drift assist active, target sideslip (rad), throttle cut, steering change (rad) | | |
 
 Performance in the browser is not comparable to the native benchmarks and is not used for any claim.
