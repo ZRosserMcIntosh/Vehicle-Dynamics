@@ -22,6 +22,7 @@
 #include "src/ground.cpp"
 #include "src/ground_cache.cpp"
 #include "src/lod_manager.cpp"
+#include "src/single_track.cpp"
 #include "src/telemetry.cpp"
 #include "src/tire.cpp"
 #include "src/tire_generator.cpp"
