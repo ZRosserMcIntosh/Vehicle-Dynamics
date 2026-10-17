@@ -100,6 +100,26 @@ void printSineDwell(const Car& car) {
     }
 }
 
+void printDrift() {
+    std::cout << "\n### Drift assist (DRIFT preset, steady inputs after a handbrake entry at 50 km/h)\n\n";
+    std::cout << "Behaviour of an aid with no real-car equivalent: steering held at a fixed position (into the turn = +) "
+                 "and fixed throttle for 10 s. Sideslip averaged after 2 s; a held drift has mean = target and a small SD.\n\n";
+    std::cout << "| Car | Steering | Throttle | Target (deg) | Mean sideslip (deg) | SD (deg) | Spun | End speed (km/h) |\n"
+                 "|---|---|---|---|---|---|---|---|\n";
+    for (const VehicleDefinition& d : {vehicles::referenceSportsRwd(), vehicles::rosserStellaV8()}) {
+        RunConfig cfg;
+        cfg.vehicle = d;
+        cfg.assists = makePreset(DrivingPreset::Drift);
+        for (Real steer : {0.0, 0.5, 1.0})
+            for (Real thr : {0.6, 1.0}) {
+                const DriftResult r = driftHold(cfg, steer, thr);
+                std::cout << std::fixed << std::setprecision(1) << "| " << d.name << " | " << steer << " | " << thr << " | "
+                          << r.meanTarget * 180 / kPi << " | " << r.meanSideslip * 180 / kPi << " | "
+                          << r.sdSideslip * 180 / kPi << " | " << (r.spun ? "yes" : "no") << " | " << r.endSpeedKmh << " |\n";
+            }
+    }
+}
+
 void printContact(const Car& car) {
     RunConfig base;
     base.vehicle = car.def;
@@ -239,6 +259,7 @@ int main(int argc, char** argv) {
     if (only.empty() || only == "sports") {
         printWet(cars[0]);
         printSineDwell(cars[0]);
+        printDrift();
         printContact(cars[0]);
         printLod();
         printTimestep(cars[0]);

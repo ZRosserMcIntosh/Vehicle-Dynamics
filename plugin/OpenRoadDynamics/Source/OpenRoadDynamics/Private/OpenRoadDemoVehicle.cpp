@@ -37,6 +37,7 @@ const FName NHandbrake(TEXT("Handbrake"));
 const FName NPresetFun(TEXT("PresetFun"));
 const FName NPresetSport(TEXT("PresetSport"));
 const FName NPresetSimulation(TEXT("PresetSimulation"));
+const FName NPresetDrift(TEXT("PresetDrift"));
 const FName NAbs(TEXT("ToggleAbs"));
 const FName NTcs(TEXT("CycleTcs"));
 const FName NEsc(TEXT("CycleEsc"));
@@ -57,6 +58,7 @@ const TCHAR* PresetName(EOpenRoadPreset P)
 	case EOpenRoadPreset::Fun: return TEXT("FUN");
 	case EOpenRoadPreset::Sport: return TEXT("SPORT");
 	case EOpenRoadPreset::Simulation: return TEXT("SIMULATION");
+	case EOpenRoadPreset::Drift: return TEXT("DRIFT");
 	}
 	return TEXT("?");
 }
@@ -234,6 +236,7 @@ void AOpenRoadDemoVehicle::EnsureInputAssets()
 	Map(Actions[NPresetSport], EKeys::Gamepad_DPad_Up);
 	Map(MakeAction(NPresetSimulation, EInputActionValueType::Boolean), EKeys::Three);
 	Map(Actions[NPresetSimulation], EKeys::Gamepad_DPad_Right);
+	Map(MakeAction(NPresetDrift, EInputActionValueType::Boolean), EKeys::Four);
 
 	Map(MakeAction(NAbs, EInputActionValueType::Boolean), EKeys::B);
 	Map(Actions[NAbs], EKeys::Gamepad_FaceButton_Left);
@@ -301,6 +304,7 @@ void AOpenRoadDemoVehicle::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	Input->BindAction(Actions[NPresetFun], ETriggerEvent::Started, this, &ThisClass::OnPresetFun);
 	Input->BindAction(Actions[NPresetSport], ETriggerEvent::Started, this, &ThisClass::OnPresetSport);
 	Input->BindAction(Actions[NPresetSimulation], ETriggerEvent::Started, this, &ThisClass::OnPresetSimulation);
+	Input->BindAction(Actions[NPresetDrift], ETriggerEvent::Started, this, &ThisClass::OnPresetDrift);
 	Input->BindAction(Actions[NAbs], ETriggerEvent::Started, this, &ThisClass::OnToggleAbs);
 	Input->BindAction(Actions[NTcs], ETriggerEvent::Started, this, &ThisClass::OnCycleTcs);
 	Input->BindAction(Actions[NEsc], ETriggerEvent::Started, this, &ThisClass::OnCycleEsc);
@@ -413,6 +417,7 @@ void AOpenRoadDemoVehicle::OnHandbrakeEnd(const FInputActionValue&)
 void AOpenRoadDemoVehicle::OnPresetFun() { Vehicle->SetPreset(EOpenRoadPreset::Fun); }
 void AOpenRoadDemoVehicle::OnPresetSport() { Vehicle->SetPreset(EOpenRoadPreset::Sport); }
 void AOpenRoadDemoVehicle::OnPresetSimulation() { Vehicle->SetPreset(EOpenRoadPreset::Simulation); }
+void AOpenRoadDemoVehicle::OnPresetDrift() { Vehicle->SetPreset(EOpenRoadPreset::Drift); }
 
 void AOpenRoadDemoVehicle::OnToggleAbs() { Vehicle->SetAbsEnabled(!Vehicle->GetAssistState().bAbs); }
 void AOpenRoadDemoVehicle::OnCycleTcs() { Vehicle->SetTractionControl(NextLevel(Vehicle->GetAssistState().TractionControl)); }

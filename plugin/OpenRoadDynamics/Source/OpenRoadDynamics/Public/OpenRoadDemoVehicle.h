@@ -119,6 +119,7 @@ private:
 	void OnPresetFun();
 	void OnPresetSport();
 	void OnPresetSimulation();
+	void OnPresetDrift();
 	void OnToggleAbs();
 	void OnCycleTcs();
 	void OnCycleEsc();

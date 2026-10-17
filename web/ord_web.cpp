@@ -204,7 +204,7 @@ struct Sim {
 Sim g;
 constexpr Real kStep = 1.0 / 360.0;
 // Frame state exported to JavaScript (see web/README.md for the layout).
-constexpr int kHeader = 32, kPerWheel = 16;
+constexpr int kHeader = 36, kPerWheel = 16;
 std::array<double, kHeader + kPerWheel * kMaxWheels> g_out{};
 
 VehicleDefinition carByIndex(int i) {
@@ -348,6 +348,8 @@ void publish() {
     o[24] = t.assists.shifting ? 1 : 0; o[25] = d.wheels.empty() ? 0 : d.wheels[0].tire.radius;
     o[26] = t.clutchEngagement; o[27] = t.steerInput; o[28] = t.throttleInput; o[29] = t.brakeInput;
     o[30] = static_cast<double>(t.groundQueries); o[31] = g.impact; g.impact = 0;
+    o[32] = t.assists.driftActive ? 1 : 0; o[33] = t.assists.driftTargetSideslip;
+    o[34] = t.assists.driftThrottleCut; o[35] = t.assists.driftSteerAngle;
     for (std::size_t w = 0; w < t.wheelCount; ++w) {
         const WheelTelemetry& wt = t.wheels[w];
         const WheelDef& wd = d.wheels[w];
@@ -383,9 +385,18 @@ ORD_EXPORT void ord_reset(double x, double y, double yaw) {
     publish();
 }
 
-// preset: 0 FUN, 1 SPORT, 2 SIMULATION. Same physics; only the assists change.
+// preset: 0 FUN, 1 SPORT, 2 SIMULATION, 3 DRIFT. Same physics; only the assists change.
 ORD_EXPORT void ord_set_preset(int preset) {
-    g.assists = makePreset(preset == 0 ? DrivingPreset::Fun : preset == 1 ? DrivingPreset::Sport : DrivingPreset::Simulation);
+    g.assists = makePreset(preset == 0 ? DrivingPreset::Fun
+                           : preset == 1 ? DrivingPreset::Sport
+                           : preset == 3 ? DrivingPreset::Drift
+                                         : DrivingPreset::Simulation);
+    if (g.vehicle) g.vehicle->assists().setConfig(g.assists);
+}
+
+// Drift assist override, 0..1 (an aid with no real-car equivalent; see assists.hpp).
+ORD_EXPORT void ord_set_drift_assist(double amount) {
+    g.assists.driftAssist = amount < 0 ? 0 : amount > 1 ? 1 : amount;
     if (g.vehicle) g.vehicle->assists().setConfig(g.assists);
 }
 

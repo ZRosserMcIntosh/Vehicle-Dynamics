@@ -817,6 +817,56 @@ TransitionResult lodTransition(Real speedKmh) {
 
 namespace ord::scenarios {
 
+DriftResult driftHold(const RunConfig& cfg, Real steerToward, Real throttle, Real entryKmh, Real holdSeconds) {
+    Sim sim(cfg);
+    prepareRolling(sim.vehicle, kmhToMs(entryKmh));
+    DriftResult r;
+    Real t = 0, tEntered = 0;
+    Real sum = 0, sum2 = 0, sumT = 0;
+    int n = 0, lastGear = sim.vehicle.telemetry().gear;
+    while (t < 4.0 + holdSeconds) {
+        const auto& tel = sim.vehicle.telemetry();
+        DriverInput in;
+        if (!r.entered && (tel.assists.driftActive || std::abs(tel.sideslip) > 0.26)) {
+            r.entered = true;
+            tEntered = t;
+        }
+        if (!r.entered) {
+            if (t > 4.0) break;  // never broke loose
+            in.steer = 0.8;
+            in.throttle = 0.9;
+            in.handbrake = (t > 0.1 && t < 0.4) ? 1.0 : 0.0;
+        } else {
+            if (t > tEntered + holdSeconds) break;
+            in.steer = steerToward;  // left-hand drift: + steers into the turn
+            in.throttle = throttle;
+            r.maxThrottleAdded = std::max(r.maxThrottleAdded, tel.throttleOut - tel.throttleInput);
+            const bool sliding = std::abs(tel.sideslip) > 0.15;
+            if (sliding && tel.gear > lastGear && throttle > 0.3) ++r.upshiftsWhileSliding;
+            if (t > tEntered + 2.0) {
+                sum += tel.sideslip;
+                sum2 += tel.sideslip * tel.sideslip;
+                sumT += tel.assists.driftTargetSideslip;
+                ++n;
+            }
+            if (std::abs(tel.sideslip) > 1.4 || tel.speed < 1.5) {
+                r.spun = true;
+                break;
+            }
+        }
+        lastGear = tel.gear;
+        sim.step(in);
+        t += sim.dt;
+    }
+    if (n) {
+        r.meanSideslip = sum / n;
+        r.sdSideslip = std::sqrt(std::max(0.0, sum2 / n - r.meanSideslip * r.meanSideslip));
+        r.meanTarget = sumT / n;
+    }
+    r.endSpeedKmh = msToKmh(sim.vehicle.telemetry().speed);
+    return r;
+}
+
 std::vector<BaselineMetric> computeBaselineMetrics() {
     std::vector<BaselineMetric> m;
     RunConfig sim;
@@ -846,6 +896,11 @@ std::vector<BaselineMetric> computeBaselineMetrics() {
     hatch.vehicle = vehicles::referenceHatchFwd();
     m.push_back({"hatch_sim_0_100_s", accelerate0to100(hatch).time0to100, 0.01});
     m.push_back({"hatch_skidpad_r40_g", skidpad(hatch).maxLateralG, 0.01});
+    RunConfig drift = sim;
+    drift.assists = makePreset(DrivingPreset::Drift);
+    drift.hz = 360;
+    m.push_back({"sports_drift_neutral_sideslip_deg", driftHold(drift, 0.0, 0.8).meanSideslip * 180 / kPi, 0.05});
+    m.push_back({"sports_drift_full_sideslip_deg", driftHold(drift, 1.0, 0.8).meanSideslip * 180 / kPi, 0.05});
     return m;
 }
 

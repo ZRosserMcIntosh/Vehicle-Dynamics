@@ -101,10 +101,110 @@ TEST_CASE("assists: gamepad speed-sensitive steering limits full-stick angle at 
 TEST_CASE("presets: the vehicle definition is identical under every preset") {
     // Presets are AssistConfig only; this guards against future coupling.
     const VehicleDefinition d = vehicles::referenceSportsRwd();
-    for (DrivingPreset p : {DrivingPreset::Fun, DrivingPreset::Sport, DrivingPreset::Simulation}) {
+    for (DrivingPreset p : {DrivingPreset::Fun, DrivingPreset::Sport, DrivingPreset::Simulation, DrivingPreset::Drift}) {
         Vehicle v(d, makePreset(p));
         CHECK(v.definition().wheels[0].tire.muY == d.wheels[0].tire.muY);
         CHECK(v.definition().mass == d.mass);
         CHECK(v.definition().inertia.z == d.inertia.z);
     }
+}
+
+// ---- Drift assist / DRIFT preset ----
+// These are behaviour tests of an aid that has no real-car equivalent (the target is game
+// feel, not a physical reference): steady inputs must give a steady, requested drift angle.
+
+TEST_CASE("drift: DRIFT preset holds the requested angle with steady inputs, without spinning") {
+    RunConfig cfg;
+    cfg.vehicle = vehicles::referenceSportsRwd();
+    cfg.assists = makePreset(DrivingPreset::Drift);
+    const Real hold = ordtest::kOptimisedBuild ? 10.0 : 5.0;
+    const DriftResult neutral = driftHold(cfg, 0.0, 0.8, 50.0, hold);
+    const DriftResult wide = driftHold(cfg, 1.0, 0.8, 50.0, hold);
+    for (const DriftResult* r : {&neutral, &wide}) {
+        CHECK(r->entered);
+        CHECK(!r->spun);
+        CHECK(std::abs(r->meanSideslip - r->meanTarget) < 0.05);  // within ~3 deg of the request
+        CHECK(r->sdSideslip < 0.04);
+        CHECK(r->meanSideslip < 0);  // left-hand drift slides out to the right (ISO sideslip < 0)
+    }
+    // Centred steering = the neutral angle; steering into the turn widens it (up to the lock).
+    CHECK_NEAR(neutral.meanTarget, -cfg.assists.driftAngleNeutral, 1e-6);
+    CHECK(wide.meanSideslip < neutral.meanSideslip - 0.12);
+}
+
+TEST_CASE("drift: holds on the reference cars across throttle and steering positions") {
+    if (!ordtest::kOptimisedBuild) return;  // 24 ten-second drifts: Release only
+    int held = 0, total = 0, spun = 0;
+    for (const VehicleDefinition& d : {vehicles::referenceSportsRwd(), vehicles::rosserStellaV8()}) {
+        RunConfig cfg;
+        cfg.vehicle = d;
+        cfg.assists = makePreset(DrivingPreset::Drift);
+        for (Real steer : {0.0, 0.5, 1.0})
+            for (Real thr : {0.6, 0.8, 1.0})
+                for (Real kmh : {40.0, 58.0}) {
+                    const DriftResult r = driftHold(cfg, steer, thr, kmh, 8.0);
+                    ++total;
+                    spun += r.spun;
+                    held += r.entered && !r.spun && std::abs(r.meanSideslip - r.meanTarget) < 0.07 && r.sdSideslip < 0.05;
+                }
+    }
+    CHECK(spun == 0);
+    CHECK(held >= total - 2);
+}
+
+TEST_CASE("drift: the drift assist only ever removes throttle and reports itself") {
+    RunConfig cfg;
+    cfg.vehicle = vehicles::referenceSportsRwd();
+    cfg.assists = makePreset(DrivingPreset::Drift);
+    const DriftResult r = driftHold(cfg, 1.0, 1.0, 50.0, ordtest::kOptimisedBuild ? 8.0 : 4.0);
+    CHECK(r.entered);
+    CHECK(r.maxThrottleAdded <= 1e-9);
+    CHECK(r.meanTarget != 0);  // AssistReport carries the target it is holding
+}
+
+TEST_CASE("drift: with the drift assist off the car is not held (the aid is really gone)") {
+    RunConfig cfg;
+    cfg.vehicle = vehicles::referenceSportsRwd();
+    cfg.assists = makePreset(DrivingPreset::Drift);
+    cfg.assists.driftAssist = 0.0;
+    const DriftResult r = driftHold(cfg, 1.0, 1.0, 50.0, 4.0);
+    CHECK(r.meanTarget == 0);
+    // Constant full lock and full throttle with no one catching it: it spins.
+    CHECK(r.spun);
+}
+
+TEST_CASE("drift: the automatic gearbox holds its gear while the car slides under power") {
+    RunConfig cfg;
+    cfg.vehicle = vehicles::referenceSportsRwd();
+    cfg.assists = makePreset(DrivingPreset::Drift);
+    const DriftResult r = driftHold(cfg, 0.5, 1.0, 50.0, ordtest::kOptimisedBuild ? 8.0 : 4.0);
+    CHECK(r.entered);
+    CHECK(r.upshiftsWhileSliding == 0);
+}
+
+TEST_CASE("assists: speed-sensitive steering can reach full countersteer in a slide") {
+    // The speed-sensitive range protects the front tires; it is measured from where the front
+    // axle travels, so in a slide full opposite stick reaches that direction (or the lock).
+    AssistSystem a(makePreset(DrivingPreset::Sport));
+    VehicleSensors s;
+    s.dt = 1.0 / 360;
+    s.speed = kmhToMs(60);
+    s.wheelbase = 2.55;
+    s.cgToFrontAxle = 1.25;
+    s.maxSteerAngle = 0.55;
+    s.frictionEstimate = 1.1;
+    s.yawRate = 0.8;                                      // rotating left...
+    s.lateralVelocity = -std::tan(0.45) * s.speed;        // ...sliding out to the right (~26 deg)
+    const Real frontTravel = std::atan2(s.lateralVelocity + s.cgToFrontAxle * s.yawRate, s.speed);
+    CHECK(frontTravel < -0.2);                            // front axle heading well to the right
+    DriverInput in;
+    in.steer = -1.0;
+    ActuatorCommands cmd;
+    for (int i = 0; i < 360; ++i) cmd = a.process(in, s);  // let the rate limiter settle
+    CHECK(cmd.steerAngle <= std::max(frontTravel, -s.maxSteerAngle) + 1e-9);
+    // Into the turn the normal (tire-protecting) limit still applies.
+    in.steer = 1.0;
+    for (int i = 0; i < 360; ++i) cmd = a.process(in, s);
+    CHECK(cmd.steerAngle <= a.report().steerLimitAngle + 1e-9);
+    CHECK(a.report().steerLimitAngle < 0.25);
 }

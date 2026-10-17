@@ -12,6 +12,7 @@ ord::DrivingPreset ToCore(EOpenRoadPreset Preset)
 	case EOpenRoadPreset::Fun: return ord::DrivingPreset::Fun;
 	case EOpenRoadPreset::Sport: return ord::DrivingPreset::Sport;
 	case EOpenRoadPreset::Simulation: return ord::DrivingPreset::Simulation;
+	case EOpenRoadPreset::Drift: return ord::DrivingPreset::Drift;
 	}
 	return ord::DrivingPreset::Sport;
 }
@@ -59,6 +60,7 @@ ord::AssistConfig MakeAssistConfig(EOpenRoadPreset Preset, EOpenRoadInputDevice 
 	if (O.bOverrideTractionControl) C.tractionControl = ToCore(O.TractionControl);
 	if (O.bOverrideStabilityControl) C.stabilityControl = ToCore(O.StabilityControl);
 	if (O.bOverrideCountersteerAssist) C.countersteerAssist = O.CountersteerAssist;
+	if (O.bOverrideDriftAssist) C.driftAssist = O.DriftAssist;
 	if (O.bOverrideShiftMode) C.shiftMode = ToCore(O.ShiftMode);
 	if (O.bOverrideAutoClutch) C.autoClutch = O.bAutoClutch;
 	return C;

@@ -32,6 +32,11 @@ Real drivenAxleSlip(const VehicleSensors& s) {
     }
     return worst;
 }
+// Slip angle of the rear axle (rad): how far the rear is sliding sideways relative to where it points.
+Real rearAxleSlip(const VehicleSensors& s) {
+    const Real b = s.wheelbase - s.cgToFrontAxle;
+    return std::atan2(s.lateralVelocity - b * s.yawRate, std::max(std::abs(s.speed), 1.0));
+}
 }  // namespace
 
 Real AssistSystem::shapeSteer(const DriverInput& in, const VehicleSensors& s) {
@@ -47,6 +52,7 @@ Real AssistSystem::shapeSteer(const DriverInput& in, const VehicleSensors& s) {
     }
 
     Real limit = s.maxSteerAngle;
+    Real limitLeft = limit, limitRight = limit;
     if (cfg_.steeringMode == SteeringMode::SpeedSensitive && s.speed > 1.0) {
         // Kinematic angle for the tightest radius the tires can sustain, plus the
         // front slip angle that produces peak lateral force. Scaling (not clamping)
@@ -54,9 +60,18 @@ Real AssistSystem::shapeSteer(const DriverInput& in, const VehicleSensors& s) {
         // from saturating the front tires.
         const Real rMin = s.speed * s.speed / std::max(s.frictionEstimate * kGravity, 0.5);
         limit = std::min(s.maxSteerAngle, std::atan(s.wheelbase / rMin) + cfg_.targetFrontSlipAngle);
+        // The limit exists to protect the front tires, so it is measured from where the front
+        // axle is actually travelling. In a slide that direction swings toward the countersteer
+        // side, and the range on that side widens to reach it (plus the peak slip angle):
+        // otherwise full countersteer would be out of the stick's reach exactly when it is needed.
+        const Real frontTravel = std::atan2(s.lateralVelocity + s.cgToFrontAxle * s.yawRate, s.speed);
+        limitLeft = clamp(std::max(limit, frontTravel + cfg_.targetFrontSlipAngle), 0.0, s.maxSteerAngle);
+        limitRight = clamp(std::max(limit, -frontTravel + cfg_.targetFrontSlipAngle), 0.0, s.maxSteerAngle);
+    } else {
+        limitLeft = limitRight = limit;
     }
     report_.steerLimitAngle = limit;
-    Real angle = steerState_ * limit;
+    Real angle = steerState_ * (steerState_ >= 0 ? limitLeft : limitRight);
 
     report_.countersteerAngle = 0;
     if (cfg_.countersteerAssist > 0 && s.speed > 3.0) {
@@ -73,7 +88,79 @@ Real AssistSystem::shapeSteer(const DriverInput& in, const VehicleSensors& s) {
             angle = blended;
         }
     }
+    angle = applyDriftSteer(angle, s);
     return clamp(angle, -s.maxSteerAngle, s.maxSteerAngle);
+}
+
+Real AssistSystem::applyDriftSteer(Real angle, const VehicleSensors& s) {
+    report_.driftActive = false;
+    report_.driftTargetSideslip = 0;
+    report_.driftSteerAngle = 0;
+    const Real vx = std::max(s.speed, 1.0);
+    const Real beta = std::atan2(s.lateralVelocity, vx);
+    if (s.dt > 0) betaRate_ += ((beta - prevBeta_) / s.dt - betaRate_) * std::min(1.0, s.dt / 0.03);
+    prevBeta_ = beta;
+    if (cfg_.driftAssist <= 0 || s.speed < 4.0) {
+        driftWeight_ = 0;
+        return angle;
+    }
+    // Engage once the rear axle is clearly sliding; let go once it has gripped again.
+    const Real rearSlip = rearAxleSlip(s);
+    if (driftWeight_ <= 0 && std::abs(rearSlip) > 0.14 && std::abs(s.yawRate) > 0.15) driftDir_ = sign(s.yawRate);
+    const bool sliding = std::abs(rearSlip) > (driftWeight_ > 0 ? 0.06 : 0.14) && driftDir_ != 0 &&
+                         sign(-beta) == driftDir_;
+    driftWeight_ = approach(driftWeight_, sliding ? 1.0 : 0.0, s.dt / 0.15);
+    if (driftWeight_ <= 0) {
+        driftDir_ = 0;
+        driftI_ = 0;
+        return angle;
+    }
+    // Steering sets the drift angle: centred = neutral, into the turn = wider, against = straighten.
+    const Real toward = clamp(steerState_ * driftDir_, -1.0, 1.0);
+    const Real maxAngle = std::min(cfg_.driftAngleMax, s.maxSteerAngle);  // beyond the lock angle it cannot be caught
+    const Real neutral = std::min(cfg_.driftAngleNeutral, maxAngle);
+    const Real mag = toward >= 0 ? lerp(neutral, maxAngle, toward) : neutral * (1.0 + toward);
+    const Real betaT = -driftDir_ * mag;  // drifting left (yaw left) means the car slides out to the right
+    // Wheel angle: point the front tires along their direction of travel (zero front slip), then
+    // steer off that line to make the drift angle change at the rate that brings it to the
+    // target (a cascade: angle error -> wanted angle rate -> steering). Controlling the rate,
+    // not just the angle, is what catches the yaw momentum of an aggressive entry; the slow
+    // integral trims the steady offset. Same structure as a drifter: the front wheels catch it.
+    const Real frontTravel = std::atan2(s.lateralVelocity + s.cgToFrontAxle * s.yawRate, vx);
+    constexpr Real kApproach = 2.5;   // 1/s, how quickly the angle is pulled to the target
+    constexpr Real kMaxRate = 0.9;    // rad/s, largest wanted rate of change of the drift angle
+    constexpr Real kRate = 0.35;      // rad of steering per rad/s of rate error
+    constexpr Real kInt = 0.6;        // rad of steering per rad*s of angle error
+    const Real rateWanted = clamp(-kApproach * (beta - betaT), -kMaxRate, kMaxRate);
+    driftI_ = clamp(driftI_ + kInt * (beta - betaT) * s.dt * driftWeight_, -0.15, 0.15);
+    const Real want = clamp(frontTravel + kRate * (betaRate_ - rateWanted) + driftI_, -s.maxSteerAngle, s.maxSteerAngle);
+    const Real w = driftWeight_ * clamp(cfg_.driftAssist, 0.0, 1.0);
+    const Real out = lerp(angle, want, w);
+    report_.driftActive = true;
+    report_.driftTargetSideslip = betaT;
+    report_.driftSteerAngle = out - angle;
+    driftTarget_ = betaT;
+    return out;
+}
+
+void AssistSystem::applyDriftThrottle(const VehicleSensors& s, ActuatorCommands& cmd) {
+    report_.driftThrottleCut = 0;
+    if (cfg_.driftAssist <= 0 || driftWeight_ <= 0) {
+        driftCut_ = 0;
+        return;
+    }
+    // Only ever removes throttle: when the car rotates past the requested angle and is still
+    // rotating, power is what is pushing it round, so trim it until the angle comes back.
+    // Looks a quarter of a second ahead so it acts on the rotation before the overshoot.
+    const Real predicted = prevBeta_ + 0.25 * betaRate_;
+    const Real over = std::abs(predicted) - (std::abs(driftTarget_) + 0.08);
+    const bool rotatingAway = sign(betaRate_) == sign(prevBeta_);
+    if (over > 0 && rotatingAway && cmd.throttle > 0) driftCut_ += s.dt * 10.0 * over / 0.1;
+    else driftCut_ -= s.dt * 2.5;
+    driftCut_ = clamp(driftCut_, 0.0, 1.0);
+    const Real cut = driftCut_ * driftWeight_ * clamp(cfg_.driftAssist, 0.0, 1.0);
+    report_.driftThrottleCut = cut;
+    cmd.throttle *= 1.0 - cut;
 }
 
 void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensors& s, ActuatorCommands& cmd) {
@@ -104,7 +191,10 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
             const Real down = s.limiterRpm * lerp(0.28, 0.50, thr);
             // Hold the gear while the driven wheels are spinning (burnouts, power slides): an
             // upshift there would only bog the engine. The limiter catches the revs instead.
-            const bool spinning = drivenAxleSlip(s) > 0.3;
+            // Same while drifting with power on: the rear is sliding, an upshift would drop the
+            // revs and straighten the car out mid-drift.
+            const bool drifting = std::abs(rearAxleSlip(s)) > 0.15 && thr > 0.3;
+            const bool spinning = drivenAxleSlip(s) > 0.3 || drifting;
             if (s.engineRpm > up && gear_ < s.forwardGears && !spinning) requestShift(gear_ + 1);
             else if (s.engineRpm < down && gear_ > 1) requestShift(gear_ - 1);
         }
@@ -279,6 +369,7 @@ ActuatorCommands AssistSystem::process(const DriverInput& in, const VehicleSenso
     updateTransmission(in, s, cmd);
     applyAbs(in, s, cmd);
     applyTcs(s, cmd);
+    applyDriftThrottle(s, cmd);
     applyEsc(s, cmd);
     return cmd;
 }
