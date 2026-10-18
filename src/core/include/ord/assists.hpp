@@ -110,6 +110,8 @@ struct AssistReport {
     Real driftSteerAngle = 0;       // rad, road-wheel angle change made by the drift assist
     Real driftThrottleCut = 0;      // 0..1 fraction of throttle removed to stop an over-rotation
     bool shifting = false;
+    Real donut = 0;                 // 0..1, drift assist standing aside so the car can spin (donuts)
+    Real handbrakeClutch = 0;       // 0..1, auto clutch opened by the handbrake
 };
 
 class AssistSystem {
@@ -164,6 +166,10 @@ private:
     Real driftCut_ = 0;        // throttle cut held by the drift assist
     Real driftTarget_ = 0;     // rad, current target sideslip
     Real driftI_ = 0;          // rad, integral of the drift-angle error (steering trim)
+    Real donut_ = 0;           // 0..1, drift assist standing aside for a donut (full lock, low speed)
+    bool donutLatch_ = false;  // a donut was asked for (full lock + throttle from low speed, not mid-drift)
+    Real hbClutch_ = 0;        // 0..1, auto clutch held open by the handbrake
+    Real hbHold_ = 0;          // 0..1, handbrake pulled (fades out over 0.3 s after release)
     Real prevBeta_ = 0, betaRate_ = 0;  // body sideslip and its filtered rate
     std::array<Real, kMaxWheels> tcBrake_{};  // brake-based traction control, per wheel (N*m)  // rev-match the engine during the current downshift
 };
