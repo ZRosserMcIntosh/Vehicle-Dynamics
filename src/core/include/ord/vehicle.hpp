@@ -131,6 +131,14 @@ public:
     // Appends one request per wheel; `out` is reused by the caller.
     void groundPrefetchRequests(std::vector<GroundStripRequest>& out) const;
 
+    // ---- Run-time tuning (garage settings; take effect on the next step) ----
+    // Steering lock: scales every steered wheel's maxSteerAngle so the largest
+    // becomes `maxAngle` (rad, 0.05..1.2). Drift cars run 0.8-1.0 rad.
+    bool setSteeringLock(Real maxAngle);
+    // Replaces a driven axle's differential (type, preload, ramps). The final
+    // drive ratio is kept. Returns false for a bad index or out-of-range values.
+    bool setDifferential(std::size_t drivenAxle, const DifferentialDef& d);
+
     // ---- Accessors ----
     const VehicleDefinition& definition() const { return def_; }
     const VehicleFidelity& fidelity() const { return fidelity_; }

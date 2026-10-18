@@ -151,6 +151,7 @@ public:
     Real gearRatio(int gear) const;
     int forwardGearCount() const { return static_cast<int>(def_.gearbox.forwardRatios.size()); }
     const DrivetrainDef& def() const { return def_; }
+    void setDifferential(std::size_t drivenAxle, const DifferentialDef& d) { def_.drivenAxles[drivenAxle].differential = d; }
     const DrivetrainTelemetry& telemetry() const { return telem_; }
     Real wotTorque(Real rpm) const;
 

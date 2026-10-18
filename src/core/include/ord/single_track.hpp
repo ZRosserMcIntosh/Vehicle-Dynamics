@@ -22,9 +22,10 @@
 //           Used for validation against the Meijaard et al. benchmark.
 //   Tyre    Normal spring-damper on the rim penetration plus longitudinal and
 //           lateral forces from ord::MagicFormulaTire with relaxation-length
-//           transient slip. Camber thrust is NOT modelled yet (the ord tire
-//           has none; roadmap M3.1), so a leaning tyre produces lateral force
-//           only through slip angle. Basic, for future game use.
+//           transient slip, camber thrust and camber twisting torque, on a
+//           toroidal (rounded-crown) tyre whose contact point rolls around
+//           the crown as the wheel leans. Each wheel sees a local ground plane
+//           from one ray per step, so it runs on uneven ground.
 //
 // Dynamics: constrained Newton-Euler equations at acceleration level,
 //   M a = F_ext + J^T lambda,   J a = -Jdot v,
@@ -58,6 +59,7 @@
 // (x forward, y right, z down) map to ord as (x, -y, -z).
 #pragma once
 
+#include "ord/ground.hpp"
 #include "ord/math.hpp"
 #include "ord/tire.hpp"
 
@@ -107,6 +109,7 @@ SingleTrackDef meijaardBenchmark();
 struct SingleTrackInput {
     Real steerTorque = 0;  // N*m, rider steer torque between rear and front frame (+ toward right steer)
     Real driveTorque = 0;  // N*m, between rear frame and rear wheel (+ drives forward)
+    Real frontWheelTorque = 0;  // N*m, between front frame and front wheel (+ forward; brakes, hub motors)
     // N*m, external couple on the rear frame about its horizontal heading axis
     // (+ toward right lean). Not a rider actuator: a disturbance (gust, push)
     // and the generalised lean torque T_phi used for validation.
@@ -140,8 +143,19 @@ public:
     // state exists.
     bool reset(Real speed, Real lean = 0, Real steer = 0, Real leanRate = 0, Real steerRate = 0);
 
-    // One fixed step. Validation uses 1e-4..5e-4 s.
+    // Rigidly moves the whole state: rotate by `yaw` about the world z axis
+    // through the origin, then translate by `offset` (velocities rotate too).
+    // Call after reset() to start somewhere other than the origin, e.g. on
+    // ground at height h: place({x, y, h}, heading).
+    void place(const Vec3& offset, Real yaw);
+
+    // One fixed step. Validation uses 1e-4..5e-4 s. Without a ground query
+    // the ground is the plane z = 0 with def().surface.
     void step(Real dt, const SingleTrackInput& in = {});
+    // Tyre mode on arbitrary ground: one vertical ray per wheel per step gives
+    // that wheel a local ground plane (point, normal, surface) for the step.
+    // NoSlip mode ignores `ground` (validation runs on z = 0).
+    void step(Real dt, const SingleTrackInput& in, const GroundQuery* ground);
 
     Real leanAngle() const;     // rad, + right
     Real steerAngle() const;    // rad, + right
@@ -149,6 +163,11 @@ public:
     Real steerRate() const;     // rad/s
     Real yawAngle() const;      // rad, heading of the rear frame (ord: + left)
     Real forwardSpeed() const;  // m/s, rear-wheel-centre velocity along the heading
+    // Wheel spin relative to its frame, rad/s (+ = rolling forward); 0 rear, 1 front.
+    Real wheelSpin(int wheel) const;
+    // Pitch of the rear frame, rad (+ nose up, e.g. a wheelie), relative to
+    // its upright reference attitude.
+    Real pitchAngle() const;
     Vec3 position() const;      // rear contact point, world
     // Kinetic + gravitational potential (+ tyre spring energy in Tyre mode), J.
     Real totalEnergy() const;
@@ -160,7 +179,22 @@ public:
     const SingleTrackBody& body(int i) const { return body_[i]; }
     const SingleTrackDef& def() const { return def_; }
     // Tyre mode: last normal load per wheel (0 rear, 1 front), N.
-    Real normalLoad(int wheel) const { return load_[wheel]; }
+    Real normalLoad(int wheel) const { return tyreOut_[wheel].load; }
+    // Tyre mode, per wheel (0 rear, 1 front), from the end of the last step.
+    struct TyreOutput {
+        Real load = 0;        // N, normal
+        Real fx = 0, fy = 0;  // N, contact frame (fy + toward the wheel's left)
+        Real camber = 0;      // rad, inclination to the ground normal
+        Real gripUsed = 0;    // combined force / available friction, 0..~1
+        bool contact = false;
+    };
+    const TyreOutput& tyreOutput(int wheel) const { return tyreOut_[wheel]; }
+    const TireSlipState& tyreSlip(int wheel) const { return slip_[wheel]; }
+    // Lower friction scale of the surfaces under the two wheels (last step).
+    Real surfaceFriction() const {
+        return std::min(plane_[0].surface.frictionScale, plane_[1].surface.frictionScale);
+    }
+    int surfaceId(int wheel) const { return plane_[wheel].surfaceId; }
 
     // Lean and steer accelerations of the current state under `in`, from the
     // full constrained nonlinear dynamics (no integration). Used to extract
@@ -194,7 +228,7 @@ private:
 
     bool buildRows(const Kin& k, Rows& rows, bool withContact) const;
     void externalForces(const Kin& k, const SingleTrackInput& in, Vec3 f[kBodies], Vec3 t[kBodies],
-                        Real* loadsOut) const;
+                        TyreOutput* out) const;
     bool accelerations(const Kin& k, const SingleTrackInput& in, Vec3 a[kBodies], Vec3 al[kBodies]) const;
     bool projectPositions(Kin& k) const;
     bool projectVelocities(Kin& k) const;
@@ -202,10 +236,26 @@ private:
     void placeBodies(Real lean, Real steer, Real pitch, Real rearSink, Kin& k) const;
     bool solveVelocities(Real speed, Real leanRate, Real steerRate, Kin& k) const;
     void updateTyreSlip(Real dt);
+    struct GroundPlane {
+        Vec3 point{};
+        Vec3 normal{0, 0, 1};
+        SurfaceProperties surface;
+        int surfaceId = 0;
+        bool valid = true;
+    };
+    struct TyreContact {
+        Vec3 axle, n, r;  // wheel axle (+y), ground normal, centre -> contact point
+        Vec3 tdir, ldir;  // contact heading and lateral directions (in the ground plane)
+        Real pen = 0;     // tyre penetration along n, m
+        Real camber = 0;  // inclination to n, rad (top toward the wheel's +y positive)
+    };
+    bool tyreContact(const Kin& k, int wheel, TyreContact& c) const;
+    void updateGround(const GroundQuery* ground);
 
     Vec3 invInertiaWorld(const Kin& k, int i, const Vec3& v) const;
     Vec3 inertiaWorld(const Kin& k, int i, const Vec3& v) const;
     Real wheelRadius(int bodyIndex) const;
+    Real crown(int bodyIndex) const;  // Tyre-mode crown radius (0 in NoSlip)
     static Real leanOf(const Kin& k);
     Real steerOf(const Kin& k) const;
 
@@ -219,8 +269,10 @@ private:
     Vec3 steerAxisLocal_;   // upward steer axis in B/H local axes
     MagicFormulaTire rearTyre_, frontTyre_;
     TireSlipState slip_[2];
-    Real load_[2] = {0, 0};
+    GroundPlane plane_[2];
+    TyreOutput tyreOut_[2];
     Real time_ = 0;
+    Real refPitch_ = 0;
     bool faulted_ = false;
 };
 

@@ -27,5 +27,6 @@
 #include "src/tire.cpp"
 #include "src/tire_generator.cpp"
 #include "src/traffic.cpp"
+#include "src/two_wheeler.cpp"
 #include "src/vehicle.cpp"
 #include "src/vehicle_def.cpp"

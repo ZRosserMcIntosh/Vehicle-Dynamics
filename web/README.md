@@ -24,7 +24,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 
 ## State buffer
 
-`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 36-value header, then 16 values per wheel.
+`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 36-value header, then 17 values per wheel (`ord_state_per_wheel()`).
 
 | Header | Meaning | Wheel | Meaning |
 |---|---|---|---|
@@ -39,6 +39,31 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 | 24–26 | shifting, wheel-0 radius, clutch | 11–13 | contact, locked, ABS active |
 | 27–30 | steer/throttle/brake input, ground queries | 14–15 | ESC brake torque, surface id |
 | 31 | largest impact speed this frame (m/s, city world) | | |
-| 32–35 | drift assist active, target sideslip (rad), throttle cut, steering change (rad) | | |
+| 32–35 | drift assist active, target sideslip (rad), throttle cut, steering change (rad) | 16 | grip used (0 = none, ~1 = at the limit) |
+
+`ord_set_tuning(steerLock, diffType, preload, powerRamp, coastRamp)` sets the steering lock (rad,
+0 = stock) and the rear differential (−1 stock, 0 open, 1 locked, 2 clutch LSD) now and whenever
+the car is re-created.
+
+## Two-wheelers
+
+`ord_bike_create(kind, x, y, yaw, speed)` (0 bicycle, 1 e-scooter, 2 sport motorcycle),
+`ord_bike_set_assists(mode, balance, abs, tcs, wheelieControl, wheeliePitch)` (mode 0 = lean, 1 =
+direct bar torque), `ord_bike_set_input(steer, throttle, frontBrake, rearBrake)` (steer + = left),
+`ord_bike_advance(dt)` (fixed 1/500 s steps), `ord_bike_remove()`. `ord_bike_state()` returns
+`ord_bike_state_size()` (66) doubles:
+
+| Index | Meaning |
+|---|---|
+| 0–3 | kind, fallen, time, speed (m/s) |
+| 4–8 | lean, steer, pitch, lean target (rad; lean/steer + = right), bar torque (N·m) |
+| 9–12 | drive, front brake, rear brake, balance-aid torques (N·m) |
+| 13–15 | ABS, TCS, wheelie control active |
+| 16–21 | grip used rear/front, load rear/front (N), camber rear/front (rad) |
+| 22–25 | heading (+ left), rear contact point x, y, z |
+| 26–28 | rear/front wheel radius, wheelbase |
+| 29–31 | crash impact speed (city walls), steer and throttle input |
+| 32–59 | 4 bodies (rear wheel, rear frame + rider, front frame, front wheel): position x, y, z, quaternion w, x, y, z |
+| 60–65 | wheel spin rear/front (rad/s), crown radius rear/front, total mass, steer-axis tilt |
 
 Performance in the browser is not comparable to the native benchmarks and is not used for any claim.

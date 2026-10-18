@@ -13,6 +13,7 @@
 
 #include "ord/ground.hpp"
 #include "ord/presets.hpp"
+#include "ord/two_wheeler.hpp"
 #include "ord/vehicle.hpp"
 #include "reference_vehicles.hpp"
 
@@ -199,12 +200,25 @@ struct Sim {
     AssistConfig assists;
     Real accumulator = 0;
     int carIndex = 0;
+    // Garage tuning, re-applied whenever the car is (re)created. lock <= 0 = stock.
+    struct Tuning {
+        double steerLock = 0;
+        int diffType = -1;  // -1 stock, 0 open, 1 locked, 2 clutch LSD
+        double preload = 80, powerRamp = 0.45, coastRamp = 0.25;
+    } tuning;
+    // Two-wheeler (bicycle / e-scooter / motorcycle), driven instead of the car when present.
+    std::unique_ptr<TwoWheeler> bike;
+    TwoWheelerInput bikeInput;
+    TwoWheelerAssists bikeAssists;
+    Real bikeAccumulator = 0;
+    int bikeKind = 0;
+    double bikeImpact = 0;
 };
 
 Sim g;
 constexpr Real kStep = 1.0 / 360.0;
 // Frame state exported to JavaScript (see web/README.md for the layout).
-constexpr int kHeader = 36, kPerWheel = 16;
+constexpr int kHeader = 36, kPerWheel = 17;
 std::array<double, kHeader + kPerWheel * kMaxWheels> g_out{};
 
 VehicleDefinition carByIndex(int i) {
@@ -360,10 +374,111 @@ void publish() {
         p[6] = wt.load; p[7] = wt.slipRatio; p[8] = wt.slipAngle; p[9] = wt.fx; p[10] = wt.fy;
         p[11] = wt.contact ? 1 : 0; p[12] = wt.brakeLocked ? 1 : 0;
         p[13] = t.assists.absActive[w] ? 1 : 0; p[14] = t.assists.escBrakeTorque[w]; p[15] = wt.surfaceId;
+        p[16] = wt.gripUsed;
     }
 }
 
 }  // namespace
+
+void applyTuning() {
+    if (!g.vehicle) return;
+    Vehicle& v = *g.vehicle;
+    const VehicleDefinition stock = carByIndex(g.carIndex);
+    Real stockLock = 0;
+    for (const auto& w : stock.wheels) stockLock = std::max(stockLock, w.maxSteerAngle);
+    v.setSteeringLock(g.tuning.steerLock > 0 ? g.tuning.steerLock : stockLock);
+    for (std::size_t a = 0; a < stock.drivetrain.drivenAxles.size(); ++a) {
+        DifferentialDef d = stock.drivetrain.drivenAxles[a].differential;
+        // Only the rear (or only) driven axle is retuned: that is the drift diff.
+        const bool rear = a + 1 == stock.drivetrain.drivenAxles.size();
+        if (g.tuning.diffType >= 0 && rear) {
+            d.type = g.tuning.diffType == 0 ? DifferentialType::Open
+                     : g.tuning.diffType == 1 ? DifferentialType::Locked
+                                              : DifferentialType::ClutchLsd;
+            d.preload = g.tuning.preload;
+            d.powerRamp = g.tuning.powerRamp;
+            d.coastRamp = g.tuning.coastRamp;
+        }
+        v.setDifferential(a, d);
+    }
+}
+
+// ---- two-wheeler state (see web/README.md) ----
+constexpr Real kBikeStep = 1.0 / 500.0;
+constexpr int kBikeState = 66;
+std::array<double, kBikeState> g_bike{};
+
+TwoWheelerDef bikeByIndex(int i) {
+    switch (i) {
+        case 1: return electricScooter();
+        case 2: return sportMotorcycle();
+        default: return benchmarkBicycle();
+    }
+}
+
+// A wall or post closer than ~0.3 m to the bike's centre line ends the ride.
+bool bikeHitsObstacle() {
+    if (!g.city || !g.bike || (g.col.segs.empty() && g.col.circs.empty())) return false;
+    const SingleTrack& m = g.bike->model();
+    const Vec3 rear = m.position();
+    const double yaw = m.yawAngle(), wb = g.bike->def().frame.wheelbase;
+    const double ux = std::cos(yaw), uy = std::sin(yaw), r = 0.3;
+    for (double s : {-0.1, 0.5 * wb, wb + 0.15}) {
+        const double px = rear.x + ux * s, py = rear.y + uy * s, pz = rear.z;
+        const int gi = std::clamp(static_cast<int>((px - g.col.gx0) / g.col.gcell), 0, g.col.gn - 1);
+        const int gj = std::clamp(static_cast<int>((py - g.col.gy0) / g.col.gcell), 0, g.col.gn - 1);
+        for (int id : g.col.grid[static_cast<std::size_t>(gj) * g.col.gn + gi]) {
+            if (id >= 0) {
+                const auto& sg = g.col.segs[static_cast<std::size_t>(id)];
+                if (pz + 1.2 < sg.z0 || pz > sg.z1) continue;
+                const double sx = sg.bx - sg.ax, sy = sg.by - sg.ay, l2 = sx * sx + sy * sy;
+                if (l2 < 1e-8) continue;
+                const double t = std::clamp(((px - sg.ax) * sx + (py - sg.ay) * sy) / l2, 0.0, 1.0);
+                const double dx = px - (sg.ax + sx * t), dy = py - (sg.ay + sy * t);
+                if (dx * dx + dy * dy < r * r) return true;
+            } else {
+                const auto& c = g.col.circs[static_cast<std::size_t>(~id)];
+                if (pz + 1.2 < c.z0 || pz > c.z1) continue;
+                const double dx = px - c.x, dy = py - c.y, rr = c.r + r;
+                if (dx * dx + dy * dy < rr * rr) return true;
+            }
+        }
+    }
+    return false;
+}
+
+void publishBike() {
+    double* o = g_bike.data();
+    if (!g.bike) { g_bike.fill(0); return; }
+    const TwoWheeler& b = *g.bike;
+    const SingleTrack& m = b.model();
+    const TwoWheelerTelemetry& t = b.telemetry();
+    const TwoWheelerDef& d = b.def();
+    o[0] = g.bikeKind; o[1] = t.fallen ? 1 : 0; o[2] = m.time(); o[3] = t.speed;
+    o[4] = t.lean; o[5] = t.steer; o[6] = t.pitch; o[7] = t.leanTarget; o[8] = t.steerTorque;
+    o[9] = t.driveTorque; o[10] = t.frontBrake; o[11] = t.rearBrake; o[12] = t.balanceTorque;
+    o[13] = t.absActive ? 1 : 0; o[14] = t.tcsActive ? 1 : 0; o[15] = t.wheelieActive ? 1 : 0;
+    o[16] = m.tyreOutput(0).gripUsed; o[17] = m.tyreOutput(1).gripUsed;
+    o[18] = m.normalLoad(0); o[19] = m.normalLoad(1);
+    o[20] = m.tyreOutput(0).camber; o[21] = m.tyreOutput(1).camber;
+    o[22] = m.yawAngle();
+    const Vec3 p = m.position();
+    o[23] = p.x; o[24] = p.y; o[25] = p.z;
+    o[26] = d.frame.rearWheel.radius; o[27] = d.frame.frontWheel.radius; o[28] = d.frame.wheelbase;
+    o[29] = g.bikeImpact; g.bikeImpact = 0;
+    o[30] = g.bikeInput.steer; o[31] = g.bikeInput.throttle;
+    for (int i = 0; i < SingleTrack::kBodies; ++i) {
+        const SingleTrackBody& bd = m.body(i);
+        double* q = o + 32 + 7 * i;
+        q[0] = bd.position.x; q[1] = bd.position.y; q[2] = bd.position.z;
+        q[3] = bd.orientation.w; q[4] = bd.orientation.x; q[5] = bd.orientation.y; q[6] = bd.orientation.z;
+    }
+    o[60] = m.wheelSpin(0); o[61] = m.wheelSpin(1);
+    o[62] = d.frame.rearTyre.crownRadius; o[63] = d.frame.frontTyre.crownRadius;
+    double mass = 0;
+    for (int i = 0; i < SingleTrack::kBodies; ++i) mass += m.body(i).mass;
+    o[64] = mass; o[65] = d.frame.steerAxisTilt;
+}
 
 // Creates (or replaces) the car and places it at (x, y) heading `yaw`. Returns 1 on success.
 ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
@@ -371,6 +486,7 @@ ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
     g.carIndex = carIndex;
     g.vehicle = std::make_unique<Vehicle>(carByIndex(carIndex), g.assists);
     if (!g.vehicle->isValid()) return 0;
+    applyTuning();
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
     g.accumulator = 0;
     g.input = {};
@@ -475,3 +591,58 @@ ORD_EXPORT void ord_city_commit(double gx0, double gy0, double gcell, int gn) {
 ORD_EXPORT double ord_bump_lane_y() { return kBumpLaneY; }
 ORD_EXPORT double ord_proving_bump_y() { return kPgBumpY; }
 ORD_EXPORT double ord_proving_split_y() { return kPgSplitY; }
+
+// ---- car tuning ----
+// Steering lock (rad, 0 = stock) and the rear differential (type -1 stock, 0 open,
+// 1 locked, 2 clutch LSD with preload N*m and power/coast ramps). Applies now and on re-creation.
+ORD_EXPORT void ord_set_tuning(double steerLock, int diffType, double preload, double powerRamp, double coastRamp) {
+    g.tuning = {steerLock, diffType, preload, powerRamp, coastRamp};
+    applyTuning();
+}
+
+// ---- two-wheelers ----
+// kind: 0 bicycle, 1 e-scooter, 2 sport motorcycle. Rear contact at (x, y), heading yaw, rolling at speed.
+ORD_EXPORT int ord_bike_create(int kind, double x, double y, double yaw, double speed) {
+    ensureGround();
+    g.bikeKind = kind;
+    g.bike = std::make_unique<TwoWheeler>(bikeByIndex(kind), g.bikeAssists);
+    g.bikeInput = {};
+    g.bikeAccumulator = 0;
+    const bool ok = g.bike->reset(x, y, yaw, speed, g.ground.get());
+    publishBike();
+    return ok ? 1 : 0;
+}
+ORD_EXPORT void ord_bike_remove() { g.bike.reset(); publishBike(); }
+// mode 0 = Lean (input asks for lean), 1 = Direct (input is handlebar torque).
+ORD_EXPORT void ord_bike_set_assists(int mode, double balance, int abs, int tcs, int wheelie, double wheeliePitch) {
+    g.bikeAssists.mode = mode == 1 ? RiderMode::Direct : RiderMode::Lean;
+    g.bikeAssists.balanceAssist = balance < 0 ? 0 : balance > 1 ? 1 : balance;
+    g.bikeAssists.abs = abs != 0;
+    g.bikeAssists.tractionControl = tcs != 0;
+    g.bikeAssists.wheelieControl = wheelie != 0;
+    g.bikeAssists.wheeliePitch = wheeliePitch;
+    if (g.bike) g.bike->setAssists(g.bikeAssists);
+}
+ORD_EXPORT void ord_bike_set_input(double steer, double throttle, double frontBrake, double rearBrake) {
+    g.bikeInput = {steer, throttle, frontBrake, rearBrake};
+}
+// Advances real time dt in fixed 1/500 s steps. Returns the steps taken.
+ORD_EXPORT int ord_bike_advance(double dt) {
+    if (!g.bike || g.bike->fallen()) { publishBike(); return 0; }
+    g.bikeAccumulator += std::min(dt, 0.1);
+    int n = 0;
+    while (g.bikeAccumulator >= kBikeStep) {
+        g.bike->step(kBikeStep, g.bikeInput, g.ground.get());
+        g.bikeAccumulator -= kBikeStep;
+        ++n;
+        if (bikeHitsObstacle()) {
+            g.bikeImpact = std::abs(g.bike->telemetry().speed);
+            g.bike->crash();
+        }
+        if (g.bike->fallen()) break;
+    }
+    publishBike();
+    return n;
+}
+ORD_EXPORT double* ord_bike_state() { return g_bike.data(); }
+ORD_EXPORT int ord_bike_state_size() { return kBikeState; }

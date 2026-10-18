@@ -55,6 +55,25 @@ struct TireParams {
     Real lowSpeedDampingPerLoad = 3.0;
     Real lowSpeedDampingFadeSpeed = 3.0;  // m/s, damping fades out above this speed
 
+    // Camber (inclination) response, used by two-wheelers. A wheel inclined by
+    // gamma (top toward +y) pushes toward +y even at zero slip angle: camber
+    // thrust, which carries most of a leaning bike's cornering force. Shape
+    // after the motorcycle Magic Formula (Pacejka 2012 sec. 11.5; Sharp,
+    // Evangelou, Limebeer 2004):
+    //   Fy = D sin(C atan(B alpha - E(...)) + C_g atan(B_g gamma)),
+    //   B_g = camberStiffness * Fz / (C_g * D)  (so dFy/dgamma = camberStiffness * Fz at 0).
+    // 0 = no camber response; the four-wheel model passes gamma = 0 today.
+    Real camberStiffness = 0.0;   // per rad, in units of Fz (bicycle ~0.9, motorcycle ~1.0)
+    Real camberShape = 0.6;       // C_g
+    // Camber twisting torque: an inclined, rolling contact patch twists the
+    // wheel toward the inside of the turn. Mz += camberTwist * Fz * gamma.
+    Real camberTwist = 0.0;       // m per rad
+    // Toroidal (rounded) cross-section: the contact point rolls around the
+    // crown as the wheel leans, moving sideways by crownRadius * gamma.
+    // 0 = thin disc. Used by the single-track model; the four-wheel model
+    // keeps its flat footprint.
+    Real crownRadius = 0.0;       // m
+
     Real rollingResistance = 0.012;   // dimensionless coefficient
     Real pneumaticTrail = 0.035;      // m, at zero slip angle
     Real trailCollapseAngle = 0.20;   // rad, trail reaches zero at this slip angle
@@ -120,11 +139,14 @@ public:
 
     // Steady-state combined-slip force for the given (transient) slip.
     // `speed` is the contact-point ground speed magnitude, used only for the wet falloff.
-    TireForces evaluate(Real fz, Real kappa, Real tanAlpha, const SurfaceProperties& surf, Real speed) const;
+    // `camber` is the inclination angle to the ground normal, rad, top of the
+    // wheel toward +y positive (only used when camberStiffness > 0).
+    TireForces evaluate(Real fz, Real kappa, Real tanAlpha, const SurfaceProperties& surf, Real speed,
+                        Real camber = 0.0) const;
 
     // Pure-slip helpers (exposed for tests and tooling).
     Real pureLongitudinal(Real fz, Real kappa, Real muScale) const;
-    Real pureLateral(Real fz, Real alpha, Real muScale) const;
+    Real pureLateral(Real fz, Real alpha, Real muScale, Real camber = 0.0) const;
 
     // Advance the lateral transient slip state implicitly:
     //   sigma_y * d(tanAlpha)/dt + |vx| * tanAlpha = -vy

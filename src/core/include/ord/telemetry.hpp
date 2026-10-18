@@ -25,6 +25,7 @@ struct WheelTelemetry {
     Real slipRatio = 0;      // transient kappa
     Real slipAngle = 0;      // rad, transient
     Real fx = 0, fy = 0;     // N, tire frame
+    Real gripUsed = 0;       // |(fx / (muX Fz), fy / (muY Fz))|: 0 = no force, ~1 = at the limit
     Real steerAngle = 0;     // rad, this wheel
     Real brakeTorque = 0;    // N*m commanded
     bool brakeLocked = false;

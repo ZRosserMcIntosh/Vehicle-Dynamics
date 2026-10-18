@@ -85,13 +85,20 @@ TireParams bicycleTyre(Real radius, Real nominalLoad) {
     t.lowSpeedDampingPerLoad = 1.0;
     t.lowSpeedDampingFadeSpeed = 1.5;
     t.rollingResistance = 0.005;
-    // Pneumatic trail is 0 on purpose until camber thrust and camber twisting
-    // torque exist (roadmap M3.1). On its own, an aligning torque of
-    // trail * Fy (no counteracting camber terms) resists the steer-into-the-
-    // lean motion the bicycle balances with: with 10 mm trail the benchmark
-    // bicycle in Tyre mode capsizes at 5 m/s, where the NoSlip model and real
-    // bicycles are self-stable.
-    t.pneumaticTrail = 0.0;
+    // Lean response of a ~30 mm bicycle tyre. Plausible values (camber
+    // stiffness after the 0.7-1.0 Fz/rad range measured for bicycle tyres),
+    // not a measured tyre. Camber thrust carries most of the cornering force,
+    // so slip angles stay small; the camber twisting torque (steers into the
+    // lean) balances the pneumatic-trail aligning torque. Without it a 10 mm
+    // trail alone makes the benchmark bicycle capsize at 5 m/s, and the
+    // toroidal crown on its own also shifts the self-stable window down. With
+    // this set the Tyre-mode benchmark is self-stable from ~4.8 to ~6.5 m/s
+    // (NoSlip: 4.29-6.02), see tests/test_single_track.cpp.
+    t.camberStiffness = 0.9;
+    t.camberShape = 0.6;
+    t.camberTwist = 0.01;
+    t.crownRadius = 0.012;
+    t.pneumaticTrail = 0.005;
     t.trailCollapseAngle = 0.2;
     t.verticalStiffness = 1.0e5;
     t.verticalDamping = 400.0;
@@ -167,7 +174,14 @@ SingleTrack::SingleTrack(const SingleTrackDef& def, SingleTrackContact contact)
                   kEy};
     joints_[2] = {kFrontWheel, kFrontFrame, {0, 0, 0}, refPos_[kFrontWheel] - refPos_[kFrontFrame], kEy, kEx, kEz};
 
+    for (GroundPlane& g : plane_) g.surface = def_.surface;
     reset(0.0);
+}
+
+Real SingleTrack::crown(int bodyIndex) const {
+    if (contact_ != SingleTrackContact::Tyre) return 0;
+    const TireParams& tp = bodyIndex == kRearWheel ? def_.rearTyre : def_.frontTyre;
+    return clamp(tp.crownRadius, 0.0, 0.9 * wheelRadius(bodyIndex));
 }
 
 Real SingleTrack::wheelRadius(int bodyIndex) const {
@@ -307,7 +321,7 @@ bool constraintImpulse(const Rows& rows, const int* idx, int n, const Real* rhs,
 // ------------------------------------------------------------------- forces
 
 void SingleTrack::externalForces(const Kin& k, const SingleTrackInput& in, Vec3 f[kBodies], Vec3 t[kBodies],
-                                 Real* loadsOut) const {
+                                 TyreOutput* out) const {
     for (int i = 0; i < kBodies; ++i) {
         f[i] = {0, 0, -def_.gravity * body_[i].mass};
         t[i] = -cross(k.w[i], inertiaWorld(k, i, k.w[i]));  // gyroscopic
@@ -321,6 +335,9 @@ void SingleTrack::externalForces(const Kin& k, const SingleTrackInput& in, Vec3 
     const Vec3 axleR = k.q[kRearWheel].rotate(kEy);
     t[kRearWheel] += axleR * in.driveTorque;
     t[kRearFrame] -= axleR * in.driveTorque;
+    const Vec3 axleF = k.q[kFrontWheel].rotate(kEy);
+    t[kFrontWheel] += axleF * in.frontWheelTorque;
+    t[kFrontFrame] -= axleF * in.frontWheelTorque;
     // External roll couple about the horizontal heading (+ = lean right).
     const Vec3 bx = k.q[kRearFrame].rotate(kEx);
     t[kRearFrame] += normalized(Vec3{bx.x, bx.y, 0}) * in.rollTorque;
@@ -330,33 +347,39 @@ void SingleTrack::externalForces(const Kin& k, const SingleTrackInput& in, Vec3 
         const int i = wi == 0 ? int(kRearWheel) : int(kFrontWheel);
         const TireParams& tp = wi == 0 ? def_.rearTyre : def_.frontTyre;
         const MagicFormulaTire& tyre = wi == 0 ? rearTyre_ : frontTyre_;
-        if (loadsOut) loadsOut[wi] = 0;
-        Vec3 d, axle;
-        if (contactDirection(k.q[i], d, axle) < 1e-6) continue;
-        const Vec3 rd = d * wheelRadius(i);
-        const Real pen = -(k.x[i].z + rd.z);
-        if (pen <= 0) continue;
-        const Vec3 vP = k.v[i] + cross(k.w[i], rd);  // material contact-point velocity
-        const Vec3 tdir = normalized(cross(axle, kEz));
-        const Vec3 ldir = cross(kEz, tdir);
-        const Real vx = dot(k.v[i], tdir);
-        const Real fz = std::max(0.0, tp.verticalStiffness * pen - tp.verticalDamping * vP.z);
-        if (loadsOut) loadsOut[wi] = fz;
-        const TireForces tf = tyre.evaluate(fz, slip_[wi].kappa, slip_[wi].tanAlpha, def_.surface, std::abs(vx));
+        if (out) out[wi] = TyreOutput{};
+        TyreContact c;
+        if (!tyreContact(k, wi, c)) continue;
+        const Vec3 vP = k.v[i] + cross(k.w[i], c.r);  // material contact-point velocity
+        const Real vx = dot(k.v[i], c.tdir);
+        const Real fz = std::max(0.0, tp.verticalStiffness * c.pen - tp.verticalDamping * dot(vP, c.n));
+        const SurfaceProperties& surf = plane_[wi].surface;
+        const TireForces tf = tyre.evaluate(fz, slip_[wi].kappa, slip_[wi].tanAlpha, surf, std::abs(vx), c.camber);
+        if (out) {
+            TyreOutput& o = out[wi];
+            o.load = fz;
+            o.fx = tf.fx;
+            o.fy = tf.fy;
+            o.camber = c.camber;
+            o.contact = true;
+            const Real ux = tf.muX * fz > 1e-9 ? tf.fx / (tf.muX * fz) : 0;
+            const Real uy = tf.muY * fz > 1e-9 ? tf.fy / (tf.muY * fz) : 0;
+            o.gripUsed = std::sqrt(ux * ux + uy * uy);
+        }
         Real fx = tf.fx, fy = tf.fy;
         // Low-speed carcass damping (the relaxation ODE alone is undamped at standstill).
         const Real fade = std::max(0.0, 1.0 - std::abs(vx) / tp.lowSpeedDampingFadeSpeed);
         const Real cd = tp.lowSpeedDampingPerLoad * fz * fade;
-        fx -= cd * dot(vP, tdir);
-        fy -= cd * dot(vP, ldir);
-        const Vec3 F = tdir * fx + ldir * fy + kEz * fz;
+        fx -= cd * dot(vP, c.tdir);
+        fy -= cd * dot(vP, c.ldir);
+        const Vec3 F = c.tdir * fx + c.ldir * fy + c.n * fz;
         f[i] += F;
-        t[i] += cross(rd, F) + kEz * tf.mz;
+        t[i] += cross(c.r, F) + c.n * tf.mz;
         // Rolling resistance is a moment (normal force shifted ahead of the
         // contact), not a contact force: a free wheel would cancel the latter
         // by spinning up. The tyre's longitudinal slip then supplies the drag.
-        const Real rr = tp.rollingResistance * def_.surface.rollingResistanceScale;
-        t[i] -= axle * (rr * fz * wheelRadius(i) * clamp(vx / 0.5, -1.0, 1.0));
+        const Real rr = tp.rollingResistance * surf.rollingResistanceScale;
+        t[i] -= c.axle * (rr * fz * wheelRadius(i) * clamp(vx / 0.5, -1.0, 1.0));
     }
 }
 
@@ -370,21 +393,64 @@ void SingleTrack::updateTyreSlip(Real dt) {
         const TireParams& tp = wi == 0 ? def_.rearTyre : def_.frontTyre;
         const MagicFormulaTire& tyre = wi == 0 ? rearTyre_ : frontTyre_;
         TireSlipState& s = slip_[wi];
-        Vec3 d, axle;
-        const bool flat = contactDirection(k_.q[i], d, axle) < 1e-6;
-        const Vec3 rd = d * wheelRadius(i);
-        if (flat || -(k_.x[i].z + rd.z) <= 0) {
+        TyreContact c;
+        if (!tyreContact(k_, wi, c)) {
             s.kappa = s.tanAlpha = 0;  // airborne: carcass relaxes
             continue;
         }
-        const Vec3 vP = k_.v[i] + cross(k_.w[i], rd);
-        const Vec3 tdir = normalized(cross(axle, kEz));
-        const Vec3 ldir = cross(kEz, tdir);
-        const Real vx = dot(k_.v[i], tdir);
+        const Vec3 vP = k_.v[i] + cross(k_.w[i], c.r);
+        const Real vx = dot(k_.v[i], c.tdir);
         const Real sx = tp.relaxationLengthX;
-        s.kappa = (s.kappa - dt / sx * dot(vP, tdir)) / (1.0 + dt * std::abs(vx) / sx);
+        s.kappa = (s.kappa - dt / sx * dot(vP, c.tdir)) / (1.0 + dt * std::abs(vx) / sx);
         s.kappa = clamp(s.kappa, -MagicFormulaTire::kSlipStateLimit, MagicFormulaTire::kSlipStateLimit);
-        tyre.integrateLateralSlip(s, vx, dot(vP, ldir), dt);
+        tyre.integrateLateralSlip(s, vx, dot(vP, c.ldir), dt);
+    }
+}
+
+bool SingleTrack::tyreContact(const Kin& k, int wi, TyreContact& c) const {
+    // Toroidal tyre on the wheel's local ground plane: the crown circle (radius
+    // R - rc in the wheel plane) touches the plane at its point lowest along
+    // -n, and the tread tube of radius rc reaches rc further along -n. rc = 0
+    // is the thin disc.
+    const int i = wi == 0 ? int(kRearWheel) : int(kFrontWheel);
+    const GroundPlane& g = plane_[wi];
+    if (!g.valid) return false;
+    const Vec3 n = g.normal;
+    c.axle = k.q[i].rotate(kEy);
+    const Vec3 down = c.axle * dot(c.axle, n) - n;
+    const Real gn = length(down);
+    if (gn < 1e-6) return false;  // wheel lying flat
+    const Vec3 d = down / gn;
+    const Real rc = crown(i);
+    c.n = n;
+    c.r = d * (wheelRadius(i) - rc) - n * rc;
+    c.pen = -dot(k.x[i] + c.r - g.point, n);
+    if (c.pen <= 0) return false;
+    c.camber = -std::asin(clamp(dot(c.axle, n), -1.0, 1.0));
+    c.tdir = normalized(cross(c.axle, n));
+    c.ldir = cross(n, c.tdir);
+    return true;
+}
+
+void SingleTrack::updateGround(const GroundQuery* ground) {
+    for (int wi = 0; wi < 2; ++wi) {
+        GroundPlane& g = plane_[wi];
+        if (!ground) {
+            g = GroundPlane{};
+            g.surface = def_.surface;
+            continue;
+        }
+        const int i = wi == 0 ? int(kRearWheel) : int(kFrontWheel);
+        const Real r = wheelRadius(i);
+        const Vec3 from = k_.x[i] + Vec3{0, 0, r};
+        const GroundHit h = ground->raycast(from, Vec3{0, 0, -1}, 3.0 * r + 1.0);
+        g.valid = h.hit;
+        if (h.hit) {
+            g.point = h.point;
+            g.normal = normalized(h.normal);
+            g.surface = h.surface;
+            g.surfaceId = h.surfaceId;
+        }
     }
 }
 
@@ -476,9 +542,14 @@ bool SingleTrack::projectVelocities(Kin& k) const {
     return true;
 }
 
-void SingleTrack::step(Real dt, const SingleTrackInput& in) {
+void SingleTrack::step(Real dt, const SingleTrackInput& in) { step(dt, in, nullptr); }
+
+void SingleTrack::step(Real dt, const SingleTrackInput& in, const GroundQuery* ground) {
     if (faulted_ || !(dt > 0)) return;
-    if (contact_ == SingleTrackContact::Tyre) updateTyreSlip(dt);
+    if (contact_ == SingleTrackContact::Tyre) {
+        updateGround(ground);
+        updateTyreSlip(dt);
+    }
 
     struct Deriv {
         Vec3 dx[kBodies];
@@ -546,7 +617,7 @@ void SingleTrack::step(Real dt, const SingleTrackInput& in) {
     k_ = next;
     if (contact_ == SingleTrackContact::Tyre) {
         Vec3 f[kBodies], t[kBodies];
-        externalForces(k_, in, f, t, load_);
+        externalForces(k_, in, f, t, tyreOut_);
     }
     time_ += dt;
     for (int i = 0; i < kBodies; ++i) {
@@ -572,8 +643,9 @@ void SingleTrack::placeBodies(Real lean, Real steer, Real pitch, Real rearSink, 
     k.q[kFrontWheel] = qH;
     Vec3 d, axle;
     contactDirection(qB, d, axle);
-    // Rear rim point at the origin (minus the tyre sink in Tyre mode).
-    const Vec3 xR = d * (-def_.rearWheel.radius) - Vec3{0, 0, rearSink};
+    // Rear contact point at the origin (minus the tyre sink in Tyre mode).
+    const Real rcR = crown(kRearWheel);
+    const Vec3 xR = d * (rcR - def_.rearWheel.radius) + Vec3{0, 0, rcR - rearSink};
     const Vec3 anchor = xR + qB.rotate(steerAnchorRef_ - refPos_[kRearWheel]);
     k.x[kRearWheel] = xR;
     k.x[kRearFrame] = xR + qB.rotate(refPos_[kRearFrame] - refPos_[kRearWheel]);
@@ -602,7 +674,8 @@ bool SingleTrack::buildConfiguration(Real lean, Real steer, Kin& k) const {
         placeBodies(lean, steer, pitch, sinkR, k);
         Vec3 d, axle;
         contactDirection(k.q[kFrontWheel], d, axle);
-        return k.x[kFrontWheel].z + d.z * def_.frontWheel.radius + sinkF;
+        const Real rcF = crown(kFrontWheel);
+        return k.x[kFrontWheel].z + d.z * (def_.frontWheel.radius - rcF) - rcF + sinkF;
     };
     Real pitch = 0;
     for (int it = 0; it < 50; ++it) {
@@ -665,13 +738,15 @@ bool SingleTrack::reset(Real speed, Real lean, Real steer, Real leanRate, Real s
     time_ = 0;
     faulted_ = false;
     slip_[0] = slip_[1] = TireSlipState{};
-    load_[0] = load_[1] = 0;
+    tyreOut_[0] = tyreOut_[1] = TyreOutput{};
+    for (GroundPlane& g : plane_) g = GroundPlane{{}, {0, 0, 1}, def_.surface, 0, true};
     Kin k;
     if (!buildConfiguration(lean, steer, k) || !solveVelocities(speed, leanRate, steerRate, k)) {
         faulted_ = true;
         return false;
     }
     k_ = k;
+    refPitch_ = std::asin(clamp(k_.q[kRearFrame].rotate(kEx).z, -1.0, 1.0));
     for (int i = 0; i < kBodies; ++i) {
         body_[i].position = k_.x[i];
         body_[i].orientation = k_.q[i];
@@ -679,6 +754,22 @@ bool SingleTrack::reset(Real speed, Real lean, Real steer, Real leanRate, Real s
         body_[i].angularVelocity = k_.w[i];
     }
     return true;
+}
+
+void SingleTrack::place(const Vec3& offset, Real yaw) {
+    const Quat qz = Quat::fromAxisAngle(kEz, yaw);
+    for (int i = 0; i < kBodies; ++i) {
+        k_.x[i] = qz.rotate(k_.x[i]) + offset;
+        k_.q[i] = qz * k_.q[i];
+        k_.q[i].normalize();
+        k_.v[i] = qz.rotate(k_.v[i]);
+        k_.w[i] = qz.rotate(k_.w[i]);
+        body_[i].position = k_.x[i];
+        body_[i].orientation = k_.q[i];
+        body_[i].velocity = k_.v[i];
+        body_[i].angularVelocity = k_.w[i];
+    }
+    for (GroundPlane& g : plane_) g.point = g.point + offset;
 }
 
 // -------------------------------------------------------------- observers
@@ -722,6 +813,19 @@ Real SingleTrack::forwardSpeed() const {
     return dot(k_.v[kRearWheel], Vec3{std::cos(psi), std::sin(psi), 0});
 }
 
+Real SingleTrack::wheelSpin(int wheel) const {
+    const int i = wheel == 0 ? int(kRearWheel) : int(kFrontWheel);
+    const int frame = wheel == 0 ? int(kRearFrame) : int(kFrontFrame);
+    return dot(k_.w[i] - k_.w[frame], k_.q[i].rotate(kEy));
+}
+
+Real SingleTrack::pitchAngle() const {
+    // Body x axis of the rear frame vs the ground plane, with the reset pitch
+    // (both wheels on the ground) as zero.
+    const Vec3 bx = k_.q[kRearFrame].rotate(kEx);
+    return std::asin(clamp(bx.z, -1.0, 1.0)) - refPitch_;
+}
+
 Vec3 SingleTrack::position() const {
     Vec3 d, axle;
     contactDirection(k_.q[kRearWheel], d, axle);
@@ -737,12 +841,9 @@ Real SingleTrack::totalEnergy() const {
     }
     if (contact_ == SingleTrackContact::Tyre) {
         for (int wi = 0; wi < 2; ++wi) {
-            const int i = wi == 0 ? int(kRearWheel) : int(kFrontWheel);
-            Vec3 d, axle;
-            contactDirection(k_.q[i], d, axle);
-            const Real pen = -(k_.x[i].z + d.z * wheelRadius(i));
+            TyreContact c;
             const Real kz = wi == 0 ? def_.rearTyre.verticalStiffness : def_.frontTyre.verticalStiffness;
-            if (pen > 0) e += 0.5 * kz * pen * pen;
+            if (tyreContact(k_, wi, c)) e += 0.5 * kz * c.pen * c.pen;
         }
     }
     return e;

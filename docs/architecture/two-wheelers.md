@@ -1,11 +1,17 @@
 # Two-wheelers: bicycles, e-scooters and motorcycles
 
-Status: **step 1 done.** A nonlinear multibody benchmark bicycle exists and is
-validated. It is for validation only: there's no rider control, no game
-integration, and it can't be driven yet.
+Status: **rideable prototype.** The validated multibody bicycle now has
+leaning tyres (camber thrust, twisting torque, a rounded crown) on arbitrary
+ground, and a rider, powertrain, brakes and aids on top: a bicycle, an
+e-scooter and a sport motorcycle can be ridden, in the browser test track
+too. Suspension, gearboxes, crash physics and the UE adapter are still to do
+(see limitations).
 Source: [`single_track.hpp`](../../src/core/include/ord/single_track.hpp),
-[`single_track.cpp`](../../src/core/src/single_track.cpp), tests in
-[`tests/test_single_track.cpp`](../../tests/test_single_track.cpp).
+[`single_track.cpp`](../../src/core/src/single_track.cpp),
+[`two_wheeler.hpp`](../../src/core/include/ord/two_wheeler.hpp),
+[`two_wheeler.cpp`](../../src/core/src/two_wheeler.cpp), tests in
+[`tests/test_single_track.cpp`](../../tests/test_single_track.cpp) and
+[`tests/test_two_wheeler.cpp`](../../tests/test_two_wheeler.cpp).
 Roadmap: [M7](../roadmap.md#m7--two-wheelers).
 
 The game is set in southeastern and southern Brazil, where bicycles, shared
@@ -44,7 +50,7 @@ a multibody core of their own and reuse the car infrastructure around it.
 Four rigid bodies in maximal coordinates (24 DOF), each with mass, full
 inertia tensor, position + quaternion and world-frame velocities. Gyroscopic
 terms (ω × Iω) are included. Three revolute joints: rear axle, steer axis
-tilted back by λ, front axle. Thin-disc wheels on flat ground. Contact modes:
+tilted back by λ, front axle. Contact modes:
 
 - **NoSlip** (Whipple/Carvallo): the material velocity of each contact point
   is zero, giving 3 velocity constraints per wheel. The vertical one is the
@@ -53,12 +59,18 @@ tilted back by λ, front axle. Thin-disc wheels on flat ground. Contact modes:
   Whipple bicycle (forward speed, lean rate, steer rate). This mode is for
   validation.
 - **Tyre**: normal spring-damper plus `MagicFormulaTire` longitudinal and
-  lateral forces with relaxation-length slip, and rolling resistance as an
-  axle moment. **There is no camber thrust yet**, so a leaning tyre makes
-  lateral force only through slip angle. Pneumatic trail defaults to 0: on
-  its own, without the camber terms that balance it on a real tyre, a 10 mm
-  pneumatic trail made the benchmark bicycle capsize at 5 m/s (see
-  limitations).
+  lateral forces with relaxation-length slip, rolling resistance as an axle
+  moment, and the lean response of a real tyre:
+  - **Camber thrust** (motorcycle Magic Formula form: camber adds to the
+    argument of the sine, so camber and slip share one friction limit) and a
+    **camber twisting torque** that steers the wheel into the lean.
+  - **Toroidal contact**: the tyre has a crown radius ρ; the contact point is
+    centre + (R − ρ)·d − ρ·n, so it rolls around the crown as the bike leans.
+  - **Arbitrary ground**: one vertical ray per wheel per step gives that wheel
+    a local plane (point, normal, surface), so the bike rides over bumps,
+    slopes and the browser's city heightfield.
+  The car model passes camber 0 and keeps its flat footprint: its behaviour
+  and benchmark numbers are unchanged.
 
 Dynamics: Newton–Euler equations with constraints at acceleration level
 (`(J M⁻¹ Jᵀ) λ = −J̇v − J M⁻¹ F`), classical RK4, then mass-weighted position
@@ -116,22 +128,98 @@ Time-domain checks (nonlinear, NoSlip, RK4 at 0.5 ms):
   (E ≈ 1600–2000 J). Holonomic constraint error stays around 10⁻¹² m.
 - Counter-steering: a right steer torque at 5 m/s steers right and leans the
   bicycle left first.
-- Tyre mode: as cornering stiffness rises from 15 to 80 (per unit load, per
-  rad), the maximum deviation of the lean history from NoSlip falls from
-  6.5·10⁻³ to 1.2·10⁻³ rad over 4 s (initial lean 0.05 rad), so the model
-  converges toward the Whipple constraint. With the default bicycle tyres at
-  5 m/s the bicycle stays up, the loads carry the weight within 1%, and the
-  deceleration is within 10% of C_rr·W / m_eff.
+- Tyre mode, knife-edge tyres (camber, crown and trail off): as cornering
+  stiffness rises from 15 to 80 (per unit load, per rad), the maximum
+  deviation of the lean history from NoSlip falls from 6.5·10⁻³ to
+  1.2·10⁻³ rad over 4 s (initial lean 0.05 rad), so the model converges
+  toward the Whipple constraint.
+- Tyre mode, default (leaning) bicycle tyres: the bicycle is self-stable in a
+  band of about 4.8–6.5 m/s (NoSlip: 4.29–6.02). At 5.5 m/s a 0.05 rad lean
+  decays to 0.003 rad; at 3 m/s it falls. Tyre compliance, the crown and the
+  twisting torque shift both critical speeds a little; on its own the crown
+  moves the band down and a 10 mm trail without camber terms destroys it,
+  which is why trail stayed 0 until camber existed. The loads carry the weight
+  within 1% and rolling deceleration is within 10% of C_rr·W / m_eff.
+- Camber thrust carries the cornering force: in the same steady lean the
+  tyres need about 1/20 of the slip angle per radian of lean that slip-only
+  tyres need (0.001 vs 0.03 rad).
+- Ground: the same run on a plane 1.5 m higher and rotated 40° is the same
+  run (lean differs < 10⁻⁶ rad); a 4 cm bump at 6 m/s is ridden over.
 
 Test runtime: about 3.9 s in Release. Debug+ASan builds run shortened
 versions (about 20 s).
+
+## Rideable two-wheelers (`TwoWheeler`)
+
+`TwoWheeler` wraps the Tyre-mode model with what a game needs. Everything
+acts through what a real rider has: handlebar torque, throttle or pedal
+torque, two brake levers and, at walking pace, a foot / body roll moment. No
+aid changes grip or any force model.
+
+- **Rider, Lean mode** (default): the steer input asks for a lean angle,
+  limited to what the bike can hold (65% of tyre grip, and the steering lock
+  at that speed), eased in and out at up to 1.2 rad/s like a rider would. An outer loop picks a steer angle from the point-mass lean
+  dynamics φ̈ = (g/h)φ − v²/(h w)·δ, an inner "arm" loop tracks it with a
+  stiff, damped torque that relaxes at speed (a stiff grip at speed feeds the
+  weave mode), and at speed a direct lean-error torque plus a slow integral
+  do most of the work. The arms also keep the bars within twice the steer
+  angle the tyres can use at that speed. **Counter-steering emerges**: to turn left at 20 m/s
+  the first bar torque and steer angle go right.
+- **Rider, Direct mode**: the input is handlebar torque. Realistic and hard;
+  meant for mouse steering.
+- **Powertrain**: power-limited wheel torque (min(T, P/ω)), optional top-speed
+  limiter, front or rear drive, aerodynamic drag. No clutch or gearbox yet.
+- **Brakes**: front and rear lever torques with a dry-friction clamp, so a
+  stopped bike holds without the jitter a stiff viscous brake has at game
+  step sizes.
+- **Aids** (each optional, all acting on throttle, brakes or the bars):
+  - low-speed balance (foot down, fades out between 1.5 and 4 m/s; off = a
+    stopped bike falls over);
+  - ABS: slip control toward ~8% slip, plus **cornering ABS** that caps brake
+    torque to the friction left over from cornering at the current lean (as
+    IMU-based ABS on modern bikes does);
+  - **cornering traction control**: slip control whose target shrinks with
+    lean, plus the same friction-circle torque ceiling, computed from
+    low-passed wheel loads (feeding back the instantaneous load pumped the
+    pitch mode);
+  - wheelie control: keeps the front loaded (cuts drive as the front load
+    falls below ~45% of static, before it lifts, since steering needs a loaded
+    front tyre) and eases the front brake as the rear unloads (stoppie
+    control). With a larger pitch setting it becomes a wheelie assist that
+    holds the front up at that angle (pitch predicted 0.3 s ahead).
+- **Vehicles**: the benchmark bicycle with a pedalling rider (60 N·m /
+  350 W), a stand-up e-scooter (8.5" wheels, 500 W hub motor, 25 km/h
+  limiter) and a ~180 kg sport motorcycle with a 75 kg rider (80 kW, steering
+  damper, 0.08 m tyre relaxation length: with 0.2 m its weave, coupled with
+  the rider loop, ran away under aggressive input at 25–35 m/s). The scooter
+  and motorcycle are representative, not measured.
+
+Results (`tests/test_two_wheeler.cpp`, 2 ms step, the browser's rate):
+
+| Check | Result |
+|---|---|
+| Lean to 80% input: time to 90% of the target | bicycle 1.3 s (6 m/s), e-scooter 0.9 s (6 m/s), motorcycle 1.2–1.7 s (10–35 m/s); overshoot ≤ ~11% (25% for the e-scooter at walking pace) |
+| Back upright after release | 0.9–1.5 s |
+| Counter-steer at 20 m/s (left turn) | bars first go right (positive torque and steer), then lean ≈ −0.44 rad |
+| Full throttle, motorcycle from 5 m/s, no aids | front lifts, loops over backwards (crash) |
+| Wheelie assist at 0.4 rad | holds 0.40–0.48 rad pitch for 3.5 s |
+| ABS stop from 20 m/s, both brakes | 2.2 s (0.92 g) |
+| Front brake 0.6 at 11 m/s, no aids | over the bars; with stoppie control: pitch > −0.25 rad |
+| E-scooter full throttle | 24.5 km/h (limiter) |
+| Bicycle up a 6% grade | climbs, contact follows the ground within 5 cm |
+| Determinism | identical runs are bit-identical |
+| Rough random riding, Fun aids, 12 × 30 s each (full-lock flicks, throttle stabs, brake grabs; motorcycle under ~110 km/h) | bicycle 0, e-scooter 1, motorcycle 0 crashes |
+
+Native cost is about 19 µs per 2 ms step (motorcycle), about 1% of a core at
+500 Hz.
 
 ## Plan
 
 ### 1. Single-track base and bicycle (~2.5 months)
 
 - [x] Nonlinear multibody single-track, NoSlip + basic Tyre contact, Meijaard benchmark validation.
-- Camber thrust and twisting torque in `MagicFormulaTire` (shared with car M3.1), then **toroidal contact**: a crowned tyre (crown radius ρ) puts the contact point at centre + (R − ρ)·d − ρ·ẑ, which moves it sideways as the bike leans. Use MF-Tyre/MF-Swift motorcycle-style camber terms (Pacejka 2012, ch. 11).
+- [x] Camber thrust and twisting torque in `MagicFormulaTire` (shared with car M3.1; cars still pass camber 0), **toroidal contact** (contact point at centre + (R − ρ)·d − ρ·n), local ground planes per wheel.
+- [x] First virtual rider (Lean and Direct modes), low-speed balance moment, brakes, power-limited drive, ABS/TCS/wheelie control (`TwoWheeler`). Still to do from this list: a real foot-down leg contact, rider body lean, the human pedalling model, presets.
 - Performance: a reduced-coordinate formulation or a tailored sparse solve (21×21 dense today) to reach tens of µs per *frame* per player bike, plus a cheaper LOD model for traffic riders.
 - **Rider control ("virtual rider")**: the rider's input is a target lean (or target path curvature). A controller turns it into steer torque, using the linear model at the current speed for gains (counter-steer emerges on its own). The rider can't create forces that aren't there. Balance aids act **only through actuators**: steer torque, rider lean (upper-body mass shift as a joint), and later brake/throttle. The model offers no "hidden hand" holding the bike up.
 - **Presets** follow ADR-0002: they never change grip or physics.
@@ -182,12 +270,15 @@ crashes.
 
 ## Limitations of the current prototype
 
-- Validation only. It isn't drivable: no rider controller and no UE adapter yet.
-- Flat ground only (z = 0), thin-disc wheels, rigid frames, rigid rider, no suspension.
-- NoSlip contact is bilateral: a wheel can't lift off (no wheelie/stoppie in that mode). Tyre mode lets wheels leave the ground, but there's no frame, pedal or handlebar contact. Once a wheel's axle is close to vertical (|φ| → 90°), the step faults (`faulted()`).
-- Tyre mode has no camber thrust or twisting torque. Its pneumatic trail defaults to 0, because a slip-only tyre with a positive aligning-moment trail destabilises the capsize mode (a 10 mm trail made the bicycle capsize at 5 m/s). Its slip states are updated once per step, before the RK4 stages (operator split), so stiff tyres need small steps (0.2 ms for the stiff-tyre test).
-- Cost: about 25 µs per 0.5 ms step (RK4 with a 21×21 dense solve per stage). That's fine for validation, but too slow for real-time use without the planned reduced-coordinate or sparse formulation.
-- Lean, steer and steer torque use the benchmark sign convention (positive = right), not ord's car convention (positive steer = left).
+- No UE adapter yet; the browser track is the only place to ride.
+- Rigid frames, rigid rider (no body lean or hang-off), **no suspension**: the motorcycle's vertical tyre stiffness stands in for tyre + suspension in series (~3 cm sag), so there is no fork dive or squat geometry. The steering damper on the motorcycle is there because the rigid model wobbles from ~20 m/s without one.
+- No frame, pedal, foot or handlebar contact: a crash is detected (lean past ~66°, pitch past ~69°, or a wall in the city) and the ride stops. The low-speed balance aid is a roll moment, not yet a leg touching the ground.
+- No clutch or gearbox (power-limited torque instead), no battery model, no pedalling cadence.
+- Camber and crown parameters are plausible, not fitted to measured tyres. The bicycle's self-stable band (4.8–6.5 m/s) is close to, not equal to, the knife-edge benchmark's.
+- Above ~110 km/h, full-lock flicks at full throttle can still put the motorcycle into a weave it doesn't recover from, even in Fun.
+- The cornering ABS / traction ceilings and the wheelie/stoppie controls are modelled on what modern bike electronics do, not on any manufacturer's logic.
+- Slip states are updated once per step, before the RK4 stages (operator split), so very stiff tyres need small steps (0.2 ms for the stiff-tyre test). The game tyres run at 2 ms.
+- Lean, steer and steer torque use the benchmark sign convention (positive = right). `TwoWheelerInput::steer` uses the car convention (positive = left).
 
 ## References
 
