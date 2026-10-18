@@ -6,11 +6,13 @@
 // exported, so the page renders exactly the ground the physics sees.
 #include <algorithm>
 #include <array>
+#include <string_view>
 #include <cstdint>
 #include <vector>
 #include <cmath>
 #include <memory>
 
+#include "ord/crash.hpp"
 #include "ord/ground.hpp"
 #include "ord/presets.hpp"
 #include "ord/two_wheeler.hpp"
@@ -69,6 +71,8 @@ Real bumpLaneHeight(Real x, Real y) {
 constexpr Real kPgBumpY = -30.0;
 constexpr Real kPgSplitY = -55.0;
 constexpr Real kPgX0 = -440.0, kPgX1 = -110.0;
+// Crash-test lane north of the skidpads: run-up from x = -440, barrier at x = -150.
+constexpr Real kCrashLaneY = 125.0, kCrashBarrierX = -150.0, kCrashPoleX = -230.0;
 
 Real cosBump(Real x, Real c, Real len, Real h) {
     const Real d = std::abs(x - c);
@@ -213,6 +217,12 @@ struct Sim {
     Real bikeAccumulator = 0;
     int bikeKind = 0;
     double bikeImpact = 0;
+    // Crash dummies: driver (left seat) and passenger, and the bike rider.
+    OccupantSim occupant[2];
+    OccupantDef occupantDef[2];
+    Vec3 pendingDeltaV{};  // collision speed change this step, body frame
+    InjuryReport riderReport;
+    std::uint32_t riderReports = 0;
 };
 
 Sim g;
@@ -248,6 +258,12 @@ void ensureGround() {
     t->addPatch({-200, -140, 25, 85, wetSurface(), 2});               // wet skidpad square
     t->addPatch({kPgX0, kPgX1, kPgSplitY, kPgSplitY + 5, wetSurface(), 2});  // split-mu: left half wet
     g.track = t.get(); g.city = nullptr;
+    // Crash-test lane: a rigid concrete barrier across the lane at its east
+    // end (frontal tests) and a 30 cm pole beside it (side-impact pole test).
+    g.col.segs = {{kCrashBarrierX, kCrashLaneY - 8, kCrashBarrierX, kCrashLaneY + 8, -1, 1.5}};
+    g.col.circs = {{kCrashPoleX, kCrashLaneY + 16, 0.15, -1, 6}};
+    g.col.gx0 = -300; g.col.gy0 = -300; g.col.gcell = 8; g.col.gn = 75;
+    g.col.build();
     g.ground = std::move(t);
 }
 
@@ -255,10 +271,11 @@ double groundHeight(double x, double y) { return g.city ? g.city->heightAt(x, y)
 
 // Push the chassis out of walls / trunks and apply a contact impulse (restitution + friction).
 void resolveCollisions() {
-    if (!g.city || (g.col.segs.empty() && g.col.circs.empty())) return;
+    if (g.col.segs.empty() && g.col.circs.empty()) return;
     Vehicle& v = *g.vehicle;
     const VehicleDefinition& d = v.definition();
     RigidBodyState b = v.state();
+    const Vec3 vBefore = b.velocity;
     // body footprint from the wheel layout (+ overhangs)
     double xf = -1e9, xr = 1e9, hw = 0;
     for (const auto& w : d.wheels) { xf = std::max(xf, w.suspension.hardpoint.x); xr = std::min(xr, w.suspension.hardpoint.x); hw = std::max(hw, std::abs(w.suspension.hardpoint.y)); }
@@ -343,7 +360,12 @@ void resolveCollisions() {
         }
         changed = true;
     }
-    if (changed) v.setChassisState(b);
+    if (changed) {
+        v.setChassisState(b);
+        // The car's speed change from the hit, body frame, for the occupants'
+        // crash pulse (the impulse itself happens in one step).
+        g.pendingDeltaV = g.pendingDeltaV + b.orientation.inverseRotate(b.velocity - vBefore);
+    }
 }
 
 void publish() {
@@ -403,6 +425,36 @@ void applyTuning() {
     }
 }
 
+void setupOccupants() {
+    if (!g.vehicle) return;
+    const VehicleDefinition& d = g.vehicle->definition();
+    double half = 0.7;
+    for (const auto& w : d.wheels) half = std::max(half, std::abs(w.suspension.hardpoint.y));
+    CrashStructure s;
+    s.halfWidth = half + 0.05;  // doors just outside the track
+    for (int i = 0; i < 2; ++i) {
+        OccupantDef& o = g.occupantDef[i];
+        o.seat = {0, i == 0 ? 0.37 : -0.37, 0};  // left-hand drive: driver on the left
+        g.occupant[i] = OccupantSim(o, s);
+    }
+    g.pendingDeltaV = {};
+}
+
+constexpr int kOccupantState = 24;
+std::array<double, kOccupantState> g_occ{};
+int verdictCode(const char* v) {
+    static const char* names[] = {"walks away", "bruised", "injured", "seriously injured", "critical"};
+    for (int i = 0; i < 5; ++i)
+        if (v && std::string_view(v) == names[i]) return i;
+    return -1;
+}
+void fillReport(double* o, const InjuryReport& r) {
+    o[0] = r.valid ? 1 : 0; o[1] = static_cast<double>(r.zone); o[2] = r.deltaV; o[3] = r.vehiclePeakG;
+    o[4] = r.peakG; o[5] = r.headPeakG; o[6] = r.chest3ms; o[7] = r.hic15; o[8] = r.excursion; o[9] = r.headExcursion;
+    o[10] = r.intrusion; o[11] = r.hardContact ? 1 : 0; o[12] = r.pHeadAis3; o[13] = r.pLifeThreatening;
+    o[14] = r.pFatalDeltaV; o[15] = verdictCode(r.verdict);
+}
+
 // ---- two-wheeler state (see web/README.md) ----
 constexpr Real kBikeStep = 1.0 / 500.0;
 constexpr int kBikeState = 66;
@@ -418,7 +470,7 @@ TwoWheelerDef bikeByIndex(int i) {
 
 // A wall or post closer than ~0.3 m to the bike's centre line ends the ride.
 bool bikeHitsObstacle() {
-    if (!g.city || !g.bike || (g.col.segs.empty() && g.col.circs.empty())) return false;
+    if (!g.bike || (g.col.segs.empty() && g.col.circs.empty())) return false;
     const SingleTrack& m = g.bike->model();
     const Vec3 rear = m.position();
     const double yaw = m.yawAngle(), wb = g.bike->def().frame.wheelbase;
@@ -487,6 +539,7 @@ ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
     g.vehicle = std::make_unique<Vehicle>(carByIndex(carIndex), g.assists);
     if (!g.vehicle->isValid()) return 0;
     applyTuning();
+    setupOccupants();
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
     g.accumulator = 0;
     g.input = {};
@@ -543,7 +596,16 @@ ORD_EXPORT int ord_advance(double dt) {
     int n = 0;
     while (g.accumulator >= kStep) {
         g.vehicle->step(kStep, g.input, *g.ground);
+        // driving acceleration seen by the occupants (before any collision
+        // impulse; a hit reaches them as a crush pulse instead)
+        Vec3 acc = g.vehicle->telemetry().accelBody;
+        const double am = length(acc), cap = 40 * 9.81;
+        if (am > cap) acc = acc * (cap / am);
         resolveCollisions();
+        if (length(g.pendingDeltaV) > 0.5)
+            for (auto& o : g.occupant) o.impact(g.pendingDeltaV);
+        g.pendingDeltaV = {};
+        for (auto& o : g.occupant) o.step(kStep, acc);
         g.input.shiftUp = g.input.shiftDown = false;
         g.accumulator -= kStep;
         ++n;
@@ -562,6 +624,7 @@ ORD_EXPORT double ord_ground_height(double x, double y) { return groundHeight(x,
 ORD_EXPORT void ord_set_world(int w) {
     g.world = w == 1 ? 1 : 0;
     g.vehicle.reset(); g.ground.reset(); g.city = nullptr; g.track = nullptr;
+    g.col.segs.clear(); g.col.circs.clear(); g.col.build();
     ensureGround();
 }
 // Allocates the city heightfield; returns the int16 buffer (cm, rows = y) to fill from JS.
@@ -635,14 +698,64 @@ ORD_EXPORT int ord_bike_advance(double dt) {
         g.bike->step(kBikeStep, g.bikeInput, g.ground.get());
         g.bikeAccumulator -= kBikeStep;
         ++n;
+        const double vBike = g.bike->telemetry().speed;
         if (bikeHitsObstacle()) {
-            g.bikeImpact = std::abs(g.bike->telemetry().speed);
+            g.bikeImpact = std::abs(vBike);
             g.bike->crash();
         }
-        if (g.bike->fallen()) break;
+        if (g.bike->fallen()) {
+            // The rider: into the wall at the bike's speed; over the bars or
+            // looped: head and shoulders first; a low-side: dropped from the
+            // seat onto the road (the slide that follows decelerates at
+            // ~0.5 g, which the occupant model does not count as injury).
+            const double pitch = g.bike->telemetry().pitch;
+            Vec3 dv{0, -std::sqrt(2 * 9.81 * 0.8), 0};
+            if (g.bikeImpact > 0) dv = {-g.bikeImpact, 0, 0};
+            else if (std::abs(pitch) > 1.0) dv = {-(4.0 + 0.3 * std::abs(vBike)), 0, 0};
+            OccupantDef rider = motorcycleRider();
+            rider.helmet = g.bikeKind != 0;  // the benchmark cyclist rides bare-headed in the demo
+            g.riderReport = analyseImpact(dv, rider, riderBody());
+            ++g.riderReports;
+            break;
+        }
     }
     publishBike();
     return n;
 }
 ORD_EXPORT double* ord_bike_state() { return g_bike.data(); }
 ORD_EXPORT int ord_bike_state_size() { return kBikeState; }
+
+// ---- crash dummies ----
+// belted, frontAirbag, sideAirbag (applies to both front seats, now and on re-creation).
+ORD_EXPORT void ord_set_occupants(int belted, int frontAirbag, int sideAirbag) {
+    for (auto& o : g.occupantDef) {
+        o.belted = belted != 0;
+        o.frontAirbag = frontAirbag != 0;
+        o.sideAirbag = sideAirbag != 0;
+    }
+    setupOccupants();
+}
+// Seat 0 driver, 1 passenger, 2 bike rider (last crash). 24 doubles: torso dx, dy, head dx, dy (m,
+// body frame), current g, event active, events so far, then the last finished report (16 values,
+// see web/README.md), seat y.
+ORD_EXPORT double* ord_occupant_state(int seat) {
+    g_occ.fill(0);
+    double* o = g_occ.data();
+    if (seat == 2) {
+        o[6] = g.riderReports;
+        fillReport(o + 7, g.riderReport);
+        return o;
+    }
+    if (seat < 0 || seat > 1) return o;
+    const OccupantSim& s = g.occupant[seat];
+    const Vec3 t = s.displacement(), h = s.headDisplacement();
+    o[0] = t.x; o[1] = t.y; o[2] = h.x; o[3] = h.y; o[4] = s.currentG();
+    o[5] = s.eventActive() ? 1 : 0; o[6] = s.eventCount();
+    fillReport(o + 7, s.report());
+    o[23] = g.occupantDef[seat].seat.y;
+    return o;
+}
+// Crash-test lane: y, barrier x, pole x (pole centre is 16 m north of the lane centre, 30 cm across).
+ORD_EXPORT double ord_crash_lane_y() { return kCrashLaneY; }
+ORD_EXPORT double ord_crash_barrier_x() { return kCrashBarrierX; }
+ORD_EXPORT double ord_crash_pole_x() { return kCrashPoleX; }

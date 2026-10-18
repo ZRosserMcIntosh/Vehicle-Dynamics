@@ -67,3 +67,15 @@ direct bar torque), `ord_bike_set_input(steer, throttle, frontBrake, rearBrake)`
 | 60–65 | wheel spin rear/front (rad/s), crown radius rear/front, total mass, steer-axis tilt |
 
 Performance in the browser is not comparable to the native benchmarks and is not used for any claim.
+
+## Crash dummies
+
+`ord_set_occupants(belted, frontAirbag, sideAirbag)` sets both front seats (driver on the left).
+`ord_occupant_state(seat)` (0 driver, 1 passenger, 2 the bike rider's last crash) returns 24
+doubles: torso dx, dy and head dx, dy (m, car frame), current g, event active, events so far, the
+last finished report (valid, zone 1 front / 2 rear / 3 left / 4 right, delta-V m/s, car pulse
+peak g, torso peak g, head peak g, chest 3 ms g, HIC15, torso and head travel m, intrusion m, hard
+contact, serious head injury risk, life-threatening injury risk, Joksch delta-V statistic, verdict
+0 walks away … 4 critical) and the seat y. The test track has a crash-test lane
+(`ord_crash_lane_y`, `ord_crash_barrier_x`, `ord_crash_pole_x`): a rigid barrier and a 30 cm pole.
+See [crash-survivability.md](../docs/architecture/crash-survivability.md).
