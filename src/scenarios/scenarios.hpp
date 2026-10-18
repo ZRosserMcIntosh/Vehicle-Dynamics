@@ -203,6 +203,7 @@ struct DriftResult {
     Real meanSideslip = 0;         // rad, after settling (2 s), sign as ISO sideslip
     Real sdSideslip = 0;           // rad
     Real meanTarget = 0;           // rad, drift assist target over the same window
+    Real maxOppositeSideslip = 0;  // rad, largest swing to the other side (> 0) after settling starts
     Real maxThrottleAdded = 0;     // max(throttle out - driver throttle): must stay <= 0
     int upshiftsWhileSliding = 0;  // automatic gearbox upshifts with the rear sliding and power on
     Real endSpeedKmh = 0;

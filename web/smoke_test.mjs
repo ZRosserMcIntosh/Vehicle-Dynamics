@@ -46,7 +46,7 @@ M._ord_set_preset(2); M._ord_set_aids(0, 0, 0, 1); M._ord_create(5, 0, 0, 0);
 let maxGear = 1;
 for (let i = 0; i < 60 * 3; ++i) { M._ord_set_input(1, 1, 0, 0, 0, 0); M._ord_advance(1 / 60); s = state(); maxGear = Math.max(maxGear, s[15]); }
 check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxGear}`);
-// DRIFT preset: handbrake entry, then steering centred and 80 % throttle; the drift assist holds ~20 deg.
+// DRIFT preset: handbrake entry, then steering 3/4 into the turn and 80 % throttle; the drift assist holds ~24 deg.
 {
   M._ord_set_preset(3);
   M._ord_create(0, 0, 0, 0);
@@ -60,7 +60,7 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
     const s = st();
     if (!entered && s[32] > 0) entered = true;
     if (!entered) M._ord_set_input(0.8, 0.9, 0, t > 0.1 && t < 0.4 ? 1 : 0, 0, 0);
-    else M._ord_set_input(0, 0.8, 0, 0, 0, 0);
+    else M._ord_set_input(0.75, 0.8, 0, 0, 0, 0);
     M._ord_advance(1 / 60); t += 1 / 60;
     const s2 = st();
     if (entered && t > 6) { sum += s2[10]; target += s2[33]; ++n; }

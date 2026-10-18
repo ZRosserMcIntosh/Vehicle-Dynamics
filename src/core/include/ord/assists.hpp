@@ -50,13 +50,14 @@ struct AssistConfig {
 
     // --- Driving aids that have no real-car equivalent (always labelled as such) ---
     Real countersteerAssist = 0.0;      // 0..1, blends front wheels toward the direction of travel in slides
-    // Drift assist, 0..1. Once the rear is sliding, the steering input sets the drift *angle*
-    // (body sideslip) instead of the road-wheel angle: centred holds driftAngleNeutral, into the
-    // turn widens toward driftAngleMax, against the turn straightens the car out. The aid
-    // countersteers and trims (never adds) throttle to hold that angle. Steering and throttle only.
+    // Drift assist, 0..1. Once the rear is sliding, steering says where the player wants to go:
+    // into the turn asks for drift angle (driftAngleHalf at half steering, up to driftAngleMax or
+    // the steering lock at full), which also tightens the line; centred or against the turn
+    // straightens the car out of the drift. The aid countersteers to hold the angle and trims
+    // (never adds) throttle when the car over-rotates. Steering and throttle only.
     Real driftAssist = 0.0;
-    Real driftAngleNeutral = 0.35;      // rad (~20 deg) held with the steering centred
-    Real driftAngleMax = 0.60;          // rad (~34 deg), further limited by the car's steering lock
+    Real driftAngleHalf = 0.33;         // rad (~19 deg) with the steering halfway into the turn
+    Real driftAngleMax = 0.60;          // rad (~34 deg) at full steering, limited by the car's steering lock
 
     // --- Transmission ---
     ShiftMode shiftMode = ShiftMode::Automatic;

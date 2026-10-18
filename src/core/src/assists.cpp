@@ -107,19 +107,27 @@ Real AssistSystem::applyDriftSteer(Real angle, const VehicleSensors& s) {
     // Engage once the rear axle is clearly sliding; let go once it has gripped again.
     const Real rearSlip = rearAxleSlip(s);
     if (driftWeight_ <= 0 && std::abs(rearSlip) > 0.14 && std::abs(s.yawRate) > 0.15) driftDir_ = sign(s.yawRate);
-    const bool sliding = std::abs(rearSlip) > (driftWeight_ > 0 ? 0.06 : 0.14) && driftDir_ != 0 &&
-                         sign(-beta) == driftDir_;
+    // Once engaged, stay engaged until the car is straight and settled, even as the drift angle
+    // swings through zero on the way out: letting go mid-exit is what lets the rear snap the
+    // other way (a pendulum the player then has to catch).
+    const bool engaged = driftWeight_ > 0;
+    const bool sliding = driftDir_ != 0 &&
+                         (engaged ? (std::abs(rearSlip) > 0.06 || std::abs(beta) > 0.05 || std::abs(betaRate_) > 0.3)
+                                  : (std::abs(rearSlip) > 0.14 && sign(-beta) == driftDir_));
     driftWeight_ = approach(driftWeight_, sliding ? 1.0 : 0.0, s.dt / 0.15);
     if (driftWeight_ <= 0) {
         driftDir_ = 0;
         driftI_ = 0;
         return angle;
     }
-    // Steering sets the drift angle: centred = neutral, into the turn = wider, against = straighten.
+    // Steering says where the player wants to go: into the turn asks for drift angle (a bigger
+    // angle settles slower and tighter, so steering harder also tightens the line); centred or
+    // against the turn straightens the car out of the drift. Angle = max * toward^p, with p chosen so half steering gives driftAngleHalf.
     const Real toward = clamp(steerState_ * driftDir_, -1.0, 1.0);
     const Real maxAngle = std::min(cfg_.driftAngleMax, s.maxSteerAngle);  // beyond the lock angle it cannot be caught
-    const Real neutral = std::min(cfg_.driftAngleNeutral, maxAngle);
-    const Real mag = toward >= 0 ? lerp(neutral, maxAngle, toward) : neutral * (1.0 + toward);
+    const Real half = clamp(cfg_.driftAngleHalf, 0.05 * maxAngle, 0.95 * maxAngle);
+    const Real p = std::log(half / maxAngle) / std::log(0.5);
+    const Real mag = toward > 0 ? maxAngle * std::pow(toward, p) : 0.0;
     const Real betaT = -driftDir_ * mag;  // drifting left (yaw left) means the car slides out to the right
     // Wheel angle: point the front tires along their direction of travel (zero front slip), then
     // steer off that line to make the drift angle change at the rate that brings it to the
@@ -131,7 +139,10 @@ Real AssistSystem::applyDriftSteer(Real angle, const VehicleSensors& s) {
     constexpr Real kMaxRate = 0.9;    // rad/s, largest wanted rate of change of the drift angle
     constexpr Real kRate = 0.35;      // rad of steering per rad/s of rate error
     constexpr Real kInt = 0.6;        // rad of steering per rad*s of angle error
-    const Real rateWanted = clamp(-kApproach * (beta - betaT), -kMaxRate, kMaxRate);
+    // Straightening out is gentler than opening up, so the yaw momentum is gone by the time the
+    // car is straight.
+    const Real maxRate = std::abs(betaT) < std::abs(beta) ? 0.55 : kMaxRate;
+    const Real rateWanted = clamp(-kApproach * (beta - betaT), -maxRate, maxRate);
     driftI_ = clamp(driftI_ + kInt * (beta - betaT) * s.dt * driftWeight_, -0.15, 0.15);
     const Real want = clamp(frontTravel + kRate * (betaRate_ - rateWanted) + driftI_, -s.maxSteerAngle, s.maxSteerAngle);
     const Real w = driftWeight_ * clamp(cfg_.driftAssist, 0.0, 1.0);
@@ -158,6 +169,11 @@ void AssistSystem::applyDriftThrottle(const VehicleSensors& s, ActuatorCommands&
     if (over > 0 && rotatingAway && cmd.throttle > 0) driftCut_ += s.dt * 10.0 * over / 0.1;
     else driftCut_ -= s.dt * 2.5;
     driftCut_ = clamp(driftCut_, 0.0, 1.0);
+    // Soft limiter: the gearbox holds its gear through a drift, so the engine can reach the rev
+    // limiter, whose fuel cut drives the rear in pulses that make the angle wobble and the drift
+    // fade. Easing the throttle over the last 4 % of the rev range lets it hover just below.
+    const Real nearLimit = clamp((s.engineRpm - 0.96 * s.limiterRpm) / (0.035 * s.limiterRpm), 0.0, 1.0);
+    driftCut_ = std::max(driftCut_, 0.6 * nearLimit);
     const Real cut = driftCut_ * driftWeight_ * clamp(cfg_.driftAssist, 0.0, 1.0);
     report_.driftThrottleCut = cut;
     cmd.throttle *= 1.0 - cut;
