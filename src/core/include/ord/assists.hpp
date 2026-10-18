@@ -57,7 +57,8 @@ struct AssistConfig {
     // (never adds) throttle when the car over-rotates. Steering and throttle only.
     Real driftAssist = 0.0;
     Real driftAngleHalf = 0.33;         // rad (~19 deg) with the steering halfway into the turn
-    Real driftAngleMax = 0.60;          // rad (~34 deg) at full steering, limited by the car's steering lock
+    Real driftAngleMax = 1.0;           // rad (~57 deg) at full steering; in practice the steering lock limits it
+                                        // (road cars ~0.55 rad = 32 deg, drift cars with an angle kit 0.8-1.0 rad)
 
     // --- Transmission ---
     ShiftMode shiftMode = ShiftMode::Automatic;

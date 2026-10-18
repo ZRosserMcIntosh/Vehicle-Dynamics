@@ -30,7 +30,7 @@ Real MagicFormulaTire::pureLongitudinal(Real fz, Real kappa, Real muScale) const
     return magicFormula(kappa, B, C, D, std::min(p_.curvatureX, 1.0));
 }
 
-Real MagicFormulaTire::pureLateral(Real fz, Real alpha, Real muScale) const {
+Real MagicFormulaTire::pureLateral(Real fz, Real alpha, Real muScale, Real camber) const {
     if (fz <= 0) return 0;
     const Real dfz = loadDelta(p_, fz);
     const Real mu = std::max(0.0, p_.muY * (1 + p_.muYLoadSensitivity * dfz)) * muScale;
@@ -40,11 +40,20 @@ Real MagicFormulaTire::pureLateral(Real fz, Real alpha, Real muScale) const {
     const Real K = p_.cornerStiffness * Fz0 * std::sin(2.0 * std::atan(fz / (p_.cornerStiffnessLoad * Fz0)));
     const Real C = p_.shapeY;
     const Real B = K / (C * D);
-    return magicFormula(alpha, B, C, D, std::min(p_.curvatureY, 1.0));
+    if (p_.camberStiffness <= 0 || camber == 0) return magicFormula(alpha, B, C, D, std::min(p_.curvatureY, 1.0));
+    // Motorcycle MF: camber adds to the argument of the sine, so camber thrust
+    // and slip force share one friction limit D.
+    const Real E = std::min(p_.curvatureY, 1.0);
+    const Real bx = B * alpha;
+    const Real Cg = std::max(p_.camberShape, 1e-3);
+    const Real Bg = p_.camberStiffness * fz / (Cg * D);
+    const Real arg = C * std::atan(bx - E * (bx - std::atan(bx))) + Cg * std::atan(Bg * camber);
+    // Past pi/2 the force falls off as in pure slip; never past pi (sign flip).
+    return D * std::sin(clamp(arg, -0.95 * kPi, 0.95 * kPi));
 }
 
 TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const SurfaceProperties& surf,
-                                      Real speed) const {
+                                      Real speed, Real camber) const {
     TireForces out;
     if (fz <= 0) return out;
 
@@ -62,7 +71,7 @@ TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const 
     const Real Gyk = std::cos(p_.rCy1 * std::atan(Byk * kappa));
 
     out.fx = combinedFx(kappa);
-    out.fy = Gyk * pureLateral(fz, alpha, muScale);
+    out.fy = Gyk * pureLateral(fz, alpha, muScale, camber);
 
     // Central-difference slope for the linearly implicit wheel-spin solve.
     constexpr Real h = 1e-4;
@@ -71,7 +80,7 @@ TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const 
     // Self-aligning torque from a collapsing pneumatic trail (simplified; the
     // MF Mz formulation with residual torque is roadmap work for force feedback).
     const Real trail = p_.pneumaticTrail * std::max(0.0, 1.0 - std::abs(alpha) / p_.trailCollapseAngle);
-    out.mz = -trail * out.fy;
+    out.mz = -trail * out.fy + p_.camberTwist * fz * camber;
 
     const Real dfz = loadDelta(p_, fz);
     out.muX = std::max(0.0, p_.muX * (1 + p_.muXLoadSensitivity * dfz)) * muScale;

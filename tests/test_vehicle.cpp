@@ -119,3 +119,64 @@ TEST_CASE("vehicle: top speed is drag-limited and stable (no oscillation at very
     CHECK(maxYaw < 0.01);              // straight-line stability
     CHECK(maxRoll < 0.01);
 }
+
+TEST_CASE("vehicle: run-time tuning: steering lock and differential, with grip-used telemetry") {
+    Vehicle v(vehicles::referenceSportsRwd(), makePreset(DrivingPreset::Simulation));
+    FlatGround g;
+    v.reset({0, 0, 0.6}, 0, g);
+    DriverInput in;
+    for (int i = 0; i < 360; ++i) v.step(1.0 / 360, in, g);
+    // Steering lock: full input reaches the new lock (Simulation steering is direct).
+    CHECK(!v.setSteeringLock(0.0));
+    CHECK(!v.setSteeringLock(1.5));
+    CHECK(v.setSteeringLock(0.9));
+    in.steer = 1.0;
+    for (int i = 0; i < 360; ++i) v.step(1.0 / 360, in, g);
+    CHECK_NEAR(v.telemetry().steerAngle, 0.9, 1e-6);
+    Real maxWheel = 0;
+    for (std::size_t w = 0; w < v.telemetry().wheelCount; ++w)
+        maxWheel = std::max(maxWheel, std::abs(v.telemetry().wheels[w].steerAngle));
+    CHECK(maxWheel > 0.85 && maxWheel < 1.05);  // Ackermann split kept around the new lock
+
+    // Differential: a locked rear axle turns both rear wheels at the same speed
+    // in a tight turn; an open one lets them differ.
+    auto rearSpread = [&](DifferentialType type) {
+        Vehicle c(vehicles::referenceSportsRwd(), makePreset(DrivingPreset::Simulation));
+        c.reset({0, 0, 0.6}, 0, g);
+        DifferentialDef d;
+        d.type = type;
+        CHECK(c.setDifferential(0, d));
+        DriverInput drive;
+        drive.steer = 0.8;
+        drive.throttle = 0.25;
+        for (int i = 0; i < 360 * 4; ++i) c.step(1.0 / 360, drive, g);
+        const auto& w = c.telemetry().wheels;
+        return std::abs(w[2].omega - w[3].omega);
+    };
+    const Real locked = rearSpread(DifferentialType::Locked), open = rearSpread(DifferentialType::Open);
+    std::printf("    rear wheel speed difference in a tight turn: locked %.3f rad/s, open %.3f rad/s\n", locked, open);
+    CHECK(locked < 0.05);
+    CHECK(open > 0.5);
+    DifferentialDef bad;
+    bad.powerRamp = 2;
+    CHECK(!v.setDifferential(0, bad));
+    CHECK(!v.setDifferential(5, DifferentialDef{}));
+
+    // Grip used: ~0 when coasting straight, near 1 for the driven wheels in a burnout.
+    Vehicle b(vehicles::referenceSportsRwd(), makePreset(DrivingPreset::Simulation));
+    b.reset({0, 0, 0.6}, 0, g);
+    DriverInput coast;
+    for (int i = 0; i < 360; ++i) b.step(1.0 / 360, coast, g);
+    CHECK(b.telemetry().wheels[0].gripUsed < 0.05);
+    DriverInput burn;
+    burn.throttle = 1.0;
+    Real peak = 0;
+    for (int i = 0; i < 720; ++i) {
+        b.step(1.0 / 360, burn, g);
+        // Below walking pace the tyre's low-speed carcass damping adds to fx
+        // (standstill holding), so the ratio is only meaningful once rolling.
+        if (b.forwardSpeed() > 3.0) peak = std::max(peak, b.telemetry().wheels[2].gripUsed);
+    }
+    std::printf("    rear grip used, full throttle above 3 m/s: peak %.2f\n", peak);
+    CHECK(peak > 0.8 && peak < 1.05);
+}

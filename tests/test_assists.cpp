@@ -221,3 +221,20 @@ TEST_CASE("assists: speed-sensitive steering can reach full countersteer in a sl
     CHECK(cmd.steerAngle <= a.report().steerLimitAngle + 1e-9);
     CHECK(a.report().steerLimitAngle < 0.25);
 }
+
+TEST_CASE("drift: a longer steering lock (angle kit) holds deeper drifts without spinning") {
+    // Stock lock (0.55 rad) caps a catchable drift near 32 deg. A drift car's
+    // ~0.9 rad lock lets the same aid hold ~50 deg at full steering.
+    RunConfig cfg;
+    cfg.vehicle = vehicles::referenceSportsRwd();
+    cfg.assists = makePreset(DrivingPreset::Drift);
+    const Real hold = ordtest::kOptimisedBuild ? 8.0 : 4.0;
+    const DriftResult stock = driftHold(cfg, 1.0, 0.8, 50.0, hold);
+    for (auto& w : cfg.vehicle.wheels) w.maxSteerAngle *= 0.9 / 0.55;
+    const DriftResult kit = driftHold(cfg, 1.0, 0.8, 50.0, hold);
+    std::printf("    full-steer drift: stock lock %.1f deg, 0.9 rad lock %.1f deg (sd %.1f deg)\n",
+                stock.meanSideslip * 180 / kPi, kit.meanSideslip * 180 / kPi, kit.sdSideslip * 180 / kPi);
+    CHECK(kit.entered && !kit.spun);
+    CHECK(kit.meanSideslip < stock.meanSideslip - 0.25);  // >14 deg deeper
+    CHECK(std::abs(kit.meanSideslip - kit.meanTarget) < 0.05);
+}

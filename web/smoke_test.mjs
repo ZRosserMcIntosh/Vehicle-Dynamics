@@ -70,5 +70,34 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
   check('drift preset holds the requested angle', entered && !spun && n > 0 && Math.abs(mean - tgt) < 0.06 && Math.abs(tgt) > 0.3,
         `${(mean * 57.3).toFixed(1)} deg (target ${(tgt * 57.3).toFixed(1)})`);
 }
+// Car tuning: a 0.9 rad steering lock reaches the wheels; grip used is published per wheel.
+{
+  M._ord_set_preset(2); M._ord_set_aids(0, 0, 0, 1); M._ord_create(0, 0, 0, 0);
+  M._ord_set_tuning(0.9, 2, 150, 0.6, 0.4);
+  for (let i = 0; i < 120; ++i) { M._ord_set_input(1, 0, 0, 0, 0, 0); M._ord_advance(1 / 60); }
+  const s = state(), H = M._ord_state_header(), P = M._ord_state_per_wheel();
+  check('tuned steering lock', Math.abs(s[16] - 0.9) < 1e-6, `${s[16].toFixed(3)} rad`);
+  check('grip used published', P >= 17 && s[H + 16] >= 0 && s[H + 16] < 1.5, `${s[H + 16].toFixed(3)}`);
+  M._ord_set_tuning(0, -1, 80, 0.45, 0.25);
+}
+// Two-wheelers: each one leans into a left turn (lean < 0, yaw increasing) and stays up.
+{
+  const bs = () => new Float64Array(M.HEAPF64.buffer, M._ord_bike_state(), M._ord_bike_state_size());
+  M._ord_bike_set_assists(0, 1, 1, 1, 1, 0.04);
+  for (const [kind, v0] of [[0, 6], [1, 6], [2, 20]]) {
+    check(`bike ${kind} create`, M._ord_bike_create(kind, 0, 0, 0, v0) === 1, '');
+    let minLean = 0;
+    for (let i = 0; i < 60 * 3; ++i) { M._ord_bike_set_input(0.6, 0.15, 0, 0); M._ord_bike_advance(1 / 60); minLean = Math.min(minLean, bs()[4]); }
+    const b = bs();
+    check(`bike ${kind} leans and turns left`, b[1] === 0 && minLean < -0.2 && b[22] > 0.3, `lean ${(minLean * 57.3).toFixed(0)} deg, yaw ${b[22].toFixed(2)}, ${(b[3] * 3.6).toFixed(0)} km/h`);
+  }
+  // Wheelie assist holds the motorcycle's front up.
+  M._ord_bike_set_assists(0, 1, 1, 0, 1, 0.4);
+  M._ord_bike_create(2, 0, 0, 0, 5);
+  let pmax = 0;
+  for (let i = 0; i < 60 * 3; ++i) { M._ord_bike_set_input(0, 1, 0, 0); M._ord_bike_advance(1 / 60); pmax = Math.max(pmax, bs()[6]); }
+  check('motorcycle wheelie assist', bs()[1] === 0 && pmax > 0.3 && pmax < 0.6, `peak pitch ${(pmax * 57.3).toFixed(0)} deg`);
+  M._ord_bike_remove();
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

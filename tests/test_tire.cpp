@@ -126,3 +126,32 @@ TEST_CASE("tire generator: parses sizes and produces plausible, monotonic parame
     MagicFormulaTire t{p};
     CHECK(t.pureLateral(4000, 0.1, 1.0) > 0);
 }
+
+TEST_CASE("tire: camber thrust pushes toward the lean, with the parameterised slope and shared friction limit") {
+    TireParams p;
+    const SurfaceProperties dry;
+    // Default (cars): no camber response at all.
+    CHECK_NEAR(MagicFormulaTire{p}.evaluate(4000, 0, 0, dry, 20, 0.2).fy, 0, 1e-12);
+
+    p.camberStiffness = 0.9;
+    p.camberTwist = 0.01;
+    p.pneumaticTrail = 0;  // isolate the camber twisting torque
+    MagicFormulaTire t{p};
+    const Real fz = p.nominalLoad;
+    // Top of the wheel toward +y -> force toward +y at zero slip angle.
+    CHECK(t.evaluate(fz, 0, 0, dry, 20, 0.1).fy > 0);
+    CHECK(t.evaluate(fz, 0, 0, dry, 20, -0.1).fy < 0);
+    const Real slope = t.evaluate(fz, 0, 0, dry, 20, 1e-5).fy / 1e-5;
+    CHECK_NEAR(slope, p.camberStiffness * fz, 0.01 * p.camberStiffness * fz);
+    // Twisting torque steers toward the lean.
+    CHECK(t.evaluate(fz, 0, 0, dry, 20, 0.2).mz > 0);
+    // Camber and slip share one friction limit: |Fy| never exceeds mu Fz.
+    const Real D = p.muY * fz;
+    Real worst = 0;
+    for (int i = -20; i <= 20; ++i)
+        for (int j = -16; j <= 16; ++j)
+            worst = std::max(worst, std::abs(t.evaluate(fz, 0, 0.02 * i, dry, 20, 0.1 * j).fy) / D);
+    CHECK(worst <= 1.0 + 1e-12);
+    // Slip opposing the lean cancels camber thrust (no sign flip at zero net).
+    CHECK(t.evaluate(fz, 0, -0.05, dry, 20, 0.0).fy < t.evaluate(fz, 0, -0.05, dry, 20, 0.3).fy);
+}

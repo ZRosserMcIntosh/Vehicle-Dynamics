@@ -372,9 +372,10 @@ TEST_CASE("single_track: [independent] steer torque to the right makes the bicyc
 }
 
 TEST_CASE("single_track: [independent] Tyre mode converges toward NoSlip as the tyres stiffen") {
-    // With tyre slip as the only lateral-force mechanism (no camber thrust
-    // yet), stiffer tyres make the slip velocity -> 0, i.e. the Whipple
-    // constraint. Compare lean histories from the same initial condition.
+    // With tyre slip as the only lateral-force mechanism (camber response,
+    // trail and crown switched off: a knife-edge wheel), stiffer tyres make
+    // the slip velocity -> 0, i.e. the Whipple constraint. Compare lean
+    // histories from the same initial condition.
     const double dt = 2e-4, T = ordtest::kOptimisedBuild ? 4.0 : 0.5;
     const SingleTrackDef base = meijaardBenchmark();
     const int n = int(T / dt + 0.5);
@@ -396,6 +397,7 @@ TEST_CASE("single_track: [independent] Tyre mode converges toward NoSlip as the 
             t->verticalStiffness = 1e6;
             t->verticalDamping = 1500;
             t->rollingResistance = 0;
+            t->camberStiffness = t->camberTwist = t->crownRadius = t->pneumaticTrail = 0;
         }
         SingleTrack ty(d, SingleTrackContact::Tyre);
         CHECK(ty.reset(5.0, 0.05));
@@ -442,4 +444,113 @@ TEST_CASE("single_track: Tyre mode with default bicycle tyres is stable, carries
     const double expectedDecel = def.rearTyre.rollingResistance * weight / mEff;  // same Crr front and rear
     const double decel = (5.0 - bike.forwardSpeed()) / T;
     CHECK_NEAR(decel, expectedDecel, 0.1 * expectedDecel);
+}
+
+namespace {
+// Lean after `T` seconds from a 0.05 rad lean perturbation (Tyre mode).
+double tyreLeanAfter(const SingleTrackDef& d, double speed, double T, double& peakLate) {
+    SingleTrack bike(d, SingleTrackContact::Tyre);
+    CHECK(bike.reset(speed, 0.05));
+    const double dt = 5e-4;
+    peakLate = 0;
+    for (int i = 0; i < int(T / dt + 0.5); ++i) {
+        bike.step(dt);
+        if (i * dt > T - 2.0) peakLate = std::max(peakLate, std::abs(bike.leanAngle()));
+    }
+    CHECK(!bike.faulted());
+    return bike.leanAngle();
+}
+}  // namespace
+
+TEST_CASE("single_track: camber thrust + rounded tyres: self-stable band in Tyre mode, falls when slow") {
+    // The default bicycle tyres now lean (camber thrust, twisting torque, a
+    // 12 mm crown and 5 mm pneumatic trail). Like the NoSlip benchmark
+    // (stable 4.29-6.02 m/s) the bicycle rights itself in a speed band and
+    // falls over at walking pace. The band moves up a little (~4.8-6.5 m/s):
+    // tyre compliance and the crown shift both weave and capsize speeds.
+    const SingleTrackDef d = meijaardBenchmark();
+    const double T = ordtest::kOptimisedBuild ? 8.0 : 3.0;
+    double peak = 0;
+    tyreLeanAfter(d, 5.5, T, peak);
+    std::printf("    5.5 m/s: peak |lean| over the last 2 s %.4f rad (start 0.05)\n", peak);
+    CHECK(peak < (ordtest::kOptimisedBuild ? 0.1 * 0.05 : 0.05));
+    if (ordtest::kOptimisedBuild) {
+        double peakSlow = 0;
+        tyreLeanAfter(d, 3.0, T, peakSlow);
+        std::printf("    3.0 m/s: peak |lean| over the last 2 s %.3f rad\n", peakSlow);
+        CHECK(peakSlow > 0.3);  // fallen over (the rim is on the ground)
+    }
+}
+
+TEST_CASE("single_track: camber thrust carries most of the cornering force, so slip angles shrink") {
+    // Same bicycle, same lean-holding rider steer torque at 5.5 m/s. Per
+    // unit of lean, a tyre with camber thrust needs a fraction of the slip
+    // angle a slip-only (knife-edge) tyre needs.
+    auto turn = [](bool camber, double& lean, double& slip) {
+        SingleTrackDef d = meijaardBenchmark();
+        if (!camber)
+            for (TireParams* t : {&d.rearTyre, &d.frontTyre})
+                t->camberStiffness = t->camberTwist = t->crownRadius = t->pneumaticTrail = 0;
+        SingleTrack bike(d, SingleTrackContact::Tyre);
+        CHECK(bike.reset(5.5));
+        SingleTrackInput in;
+        const double dt = 5e-4;
+        for (int i = 0; i < int(4.0 / dt); ++i) {
+            // A gentle proportional-derivative rider toward 0.2 rad of lean (it
+            // settles short of it; both versions settle into a steady turn).
+            in.steerTorque = 2.0 * (bike.leanAngle() - 0.2) + 0.3 * bike.leanRate();
+            in.driveTorque = 3.0;
+            bike.step(dt, in);
+        }
+        CHECK(!bike.faulted());
+        lean = bike.leanAngle();
+        slip = std::abs(std::atan(bike.tyreSlip(0).tanAlpha)) + std::abs(std::atan(bike.tyreSlip(1).tanAlpha));
+    };
+    double leanC = 0, slipC = 0, leanS = 0, slipS = 0;
+    turn(true, leanC, slipC);
+    turn(false, leanS, slipS);
+    std::printf("    lean %.3f / %.3f rad, rear+front slip angle %.4f (camber) vs %.4f (slip only) rad\n", leanC, leanS,
+                slipC, slipS);
+    CHECK(leanC > 0.08 && leanS > 0.08);
+    CHECK(slipC / leanC < 0.3 * (slipS / leanS));
+}
+
+TEST_CASE("single_track: Tyre mode follows arbitrary ground: offset plane, and rides over a bump") {
+    // (1) The same run on ground 1.5 m higher, rotated 40 deg, is the same run.
+    const SingleTrackDef d = meijaardBenchmark();
+    const double dt = 5e-4;
+    const int n = int((ordtest::kOptimisedBuild ? 3.0 : 1.0) / dt);
+    SingleTrack a(d, SingleTrackContact::Tyre), b(d, SingleTrackContact::Tyre);
+    CHECK(a.reset(5.5, 0.05) && b.reset(5.5, 0.05));
+    b.place({3.0, -2.0, 1.5}, 0.7);
+    const FlatGround raised(1.5);
+    double dev = 0;
+    for (int i = 0; i < n; ++i) {
+        a.step(dt);
+        b.step(dt, {}, &raised);
+        dev = std::max(dev, std::abs(a.leanAngle() - b.leanAngle()));
+    }
+    CHECK(!b.faulted());
+    CHECK(dev < 1e-6);
+    CHECK_NEAR(b.yawAngle() - a.yawAngle(), 0.7, 1e-6);
+
+    // (2) A 4 cm cosine bump across the path at 6 m/s: both wheels lift and
+    // land, the bicycle stays up.
+    const TestTrackGround bump([](Real x, Real) {
+        const Real u = std::abs(x - 4.0);
+        return u < 0.4 ? 0.02 * (1 + std::cos(kPi * u / 0.4)) : 0.0;
+    });
+    SingleTrack c(d, SingleTrackContact::Tyre);
+    CHECK(c.reset(6.0, 0.02));
+    double maxRise = 0, minLoad = 1e9;
+    for (int i = 0; i < int(2.0 / dt); ++i) {
+        c.step(dt, {}, &bump);
+        maxRise = std::max(maxRise, c.body(SingleTrack::kRearFrame).position.z);
+        minLoad = std::min(minLoad, c.normalLoad(1));
+    }
+    std::printf("    bump: rear-frame CoM peak z %.3f m, min front load %.0f N\n", maxRise, minLoad);
+    CHECK(!c.faulted());
+    CHECK(c.position().x > 8.0);
+    CHECK(std::abs(c.leanAngle()) < 0.15);
+    CHECK(maxRise > d.rearFrame.centreOfMass.z + 0.01);
 }

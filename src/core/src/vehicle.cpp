@@ -826,11 +826,34 @@ void Vehicle::fillTelemetry(const DriverInput& input, const ActuatorCommands& cm
         wt.slipAngle = std::atan(ws.slip.tanAlpha);
         wt.fx = ws.forces.fx;
         wt.fy = ws.forces.fy;
+        {
+            const Real cx = ws.forces.muX * ws.load, cy = ws.forces.muY * ws.load;
+            const Real ux = cx > 1e-9 ? ws.forces.fx / cx : 0, uy = cy > 1e-9 ? ws.forces.fy / cy : 0;
+            wt.gripUsed = ws.contact ? std::sqrt(ux * ux + uy * uy) : 0;
+        }
         wt.steerAngle = ws.steer;
         wt.brakeTorque = cmd.brakeTorque[w];
         wt.brakeLocked = solveOut[w].brakeLocked;
         wt.surfaceId = ws.hit.surfaceId;
     }
+}
+
+bool Vehicle::setSteeringLock(Real maxAngle) {
+    if (!(maxAngle > 0.05 && maxAngle <= 1.2) || maxSteerRef_ <= 0) return false;
+    const Real k = maxAngle / maxSteerRef_;
+    for (WheelDef& wd : def_.wheels) wd.maxSteerAngle *= k;  // keeps the Ackermann split
+    maxSteerRef_ = maxAngle;
+    return true;
+}
+
+bool Vehicle::setDifferential(std::size_t drivenAxle, const DifferentialDef& d) {
+    if (drivenAxle >= def_.drivetrain.drivenAxles.size()) return false;
+    if (!(d.preload >= 0 && d.powerRamp >= 0 && d.powerRamp <= 1 && d.coastRamp >= 0 && d.coastRamp <= 1)) return false;
+    DifferentialDef v = d;
+    v.finalDrive = def_.drivetrain.drivenAxles[drivenAxle].differential.finalDrive;  // gearing is not a diff setting
+    def_.drivetrain.drivenAxles[drivenAxle].differential = v;
+    drivetrain_.setDifferential(drivenAxle, v);
+    return true;
 }
 
 }  // namespace ord

@@ -77,8 +77,8 @@ Turbo boost/lag, supercharger, EV motor envelopes, hybrid, torque converter, vis
 Bicycles, e-scooters/e-bikes and motorcycles at car-level fidelity. Plan, results and limitations: [two-wheelers.md](architecture/two-wheelers.md).
 
 1. [x] **Single-track multibody prototype** (`ord/single_track.hpp`): four rigid bodies, revolute joints, Whipple rolling contact + basic tyre mode. *Accept:* weave/capsize speeds of the Meijaard et al. (2007) benchmark bicycle within 1e-3 m/s. Achieved: ~5e-12 m/s, matrices and eigenvalues to ~1e-12.
-2. Camber thrust/twisting torque (shared with M3.1) and toroidal tyre contact.
-3. Virtual rider (target lean → steer torque), FUN/SPORT/SIMULATION presets acting only through actuators, low-speed balance and foot-down. Bicycle reference vehicles. *(Bicycle total ~2.5 months.)*
+2. [x] Camber thrust/twisting torque (shared with M3.1; cars pass camber 0 for now) and toroidal tyre contact on arbitrary ground. *Accept:* Tyre-mode benchmark bicycle self-stable in a band near the benchmark's. Achieved: ~4.8–6.5 m/s (benchmark 4.29–6.02).
+3. Virtual rider (target lean → steer torque), FUN/SPORT/SIMULATION presets acting only through actuators, low-speed balance and foot-down. Bicycle reference vehicles. *(Bicycle total ~2.5 months.)* **Partly done:** `TwoWheeler` with Lean/Direct rider, balance moment, brakes, ABS/TCS/wheelie control and three ridable vehicles (bicycle, e-scooter, sport motorcycle); still to do: leg contact for foot-down, rider body lean, presets, pedalling model.
 4. E-scooter and e-bike: hub motor, battery sag, pedal assist, human pedalling model with derailleur gears. *(+3–4 weeks.)*
 5. Motorcycles: fork and swingarm (chain anti-squat), CVT and manual powertrains, wheelie/stoppie, low-side/high-side detection, weave/wobble validation (Sharp 1971, Cossalter). *(+2–3 months.)*
 6. UE: rider skeleton/animation, ragdoll handoff, camera. *(+1–2+ months.)*

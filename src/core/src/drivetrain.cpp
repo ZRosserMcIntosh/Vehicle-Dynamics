@@ -36,8 +36,9 @@ Drivetrain::Drivetrain(const DrivetrainDef& def, std::size_t wheelCount,
         b.j[kWheel0 + w] = 1;
     }
     for (std::size_t a = 0; a < def_.drivenAxles.size(); ++a) {
+        // Every driven axle gets a locking row (capacity 0 while Open), so
+        // the differential can be retuned at run time (setDifferential).
         const auto& da = def_.drivenAxles[a];
-        if (da.differential.type == DifferentialType::Open) continue;
         FrictionRow& d = add(FrictionKind::AxleDiff, a);
         d.j[kWheel0 + axleWheels_[da.axleIndex][0]] = 1;
         d.j[kWheel0 + axleWheels_[da.axleIndex][1]] = -1;
@@ -139,7 +140,9 @@ void Drivetrain::step(Real dt, const DrivetrainCommand& cmd, const WheelSolveInp
                 break;
             case FrictionKind::AxleDiff: {
                 const auto& da = def_.drivenAxles[r.index];
-                if (da.differential.type == DifferentialType::Locked) {
+                if (da.differential.type == DifferentialType::Open) {
+                    r.capacity = 0;
+                } else if (da.differential.type == DifferentialType::Locked) {
                     r.capacity = kLockedCapacity;
                 } else {
                     const Real axleIn = std::abs(lastInputTorque_ * gear * da.differential.finalDrive) * da.torqueShare;
