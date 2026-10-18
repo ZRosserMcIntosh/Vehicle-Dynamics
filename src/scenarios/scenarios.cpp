@@ -849,6 +849,7 @@ DriftResult driftHold(const RunConfig& cfg, Real steerToward, Real throttle, Rea
                 sumT += tel.assists.driftTargetSideslip;
                 ++n;
             }
+            if (t > tEntered + 0.5) r.maxOppositeSideslip = std::max(r.maxOppositeSideslip, tel.sideslip);  // left drift: opposite = > 0
             if (std::abs(tel.sideslip) > 1.4 || tel.speed < 1.5) {
                 r.spun = true;
                 break;
@@ -899,7 +900,7 @@ std::vector<BaselineMetric> computeBaselineMetrics() {
     RunConfig drift = sim;
     drift.assists = makePreset(DrivingPreset::Drift);
     drift.hz = 360;
-    m.push_back({"sports_drift_neutral_sideslip_deg", driftHold(drift, 0.0, 0.8).meanSideslip * 180 / kPi, 0.05});
+    m.push_back({"sports_drift_half_sideslip_deg", driftHold(drift, 0.5, 0.8).meanSideslip * 180 / kPi, 0.05});
     m.push_back({"sports_drift_full_sideslip_deg", driftHold(drift, 1.0, 0.8).meanSideslip * 180 / kPi, 0.05});
     return m;
 }

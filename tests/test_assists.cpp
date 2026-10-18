@@ -118,18 +118,31 @@ TEST_CASE("drift: DRIFT preset holds the requested angle with steady inputs, wit
     cfg.vehicle = vehicles::referenceSportsRwd();
     cfg.assists = makePreset(DrivingPreset::Drift);
     const Real hold = ordtest::kOptimisedBuild ? 10.0 : 5.0;
-    const DriftResult neutral = driftHold(cfg, 0.0, 0.8, 50.0, hold);
-    const DriftResult wide = driftHold(cfg, 1.0, 0.8, 50.0, hold);
-    for (const DriftResult* r : {&neutral, &wide}) {
+    const DriftResult half = driftHold(cfg, 0.5, 0.8, 50.0, hold);
+    const DriftResult full = driftHold(cfg, 1.0, 0.8, 50.0, hold);
+    for (const DriftResult* r : {&half, &full}) {
         CHECK(r->entered);
         CHECK(!r->spun);
         CHECK(std::abs(r->meanSideslip - r->meanTarget) < 0.05);  // within ~3 deg of the request
         CHECK(r->sdSideslip < 0.04);
         CHECK(r->meanSideslip < 0);  // left-hand drift slides out to the right (ISO sideslip < 0)
     }
-    // Centred steering = the neutral angle; steering into the turn widens it (up to the lock).
-    CHECK_NEAR(neutral.meanTarget, -cfg.assists.driftAngleNeutral, 1e-6);
-    CHECK(wide.meanSideslip < neutral.meanSideslip - 0.12);
+    // Full steering into the turn asks for the largest angle the lock can catch; half asks for less.
+    CHECK_NEAR(full.meanTarget, -std::min(cfg.assists.driftAngleMax, cfg.vehicle.wheels[0].maxSteerAngle), 1e-6);
+    CHECK(half.meanSideslip > full.meanSideslip + 0.12);
+}
+
+TEST_CASE("drift: centring the steering straightens the car out of the drift, without a swing back") {
+    // "Steer where you want to go": once the car points where the player wants, letting go of
+    // the steering ends the drift. Before, centred held a 20 deg drift and the car kept rotating.
+    RunConfig cfg;
+    cfg.vehicle = vehicles::referenceSportsRwd();
+    cfg.assists = makePreset(DrivingPreset::Drift);
+    const DriftResult r = driftHold(cfg, 0.0, 0.8, 50.0, 4.0);
+    CHECK(r.entered);
+    CHECK(!r.spun);
+    CHECK(std::abs(r.meanSideslip) < 0.05);  // straight (window starts 2 s after the entry)
+    CHECK(r.maxOppositeSideslip < 0.09);     // no pendulum to the other side (< 5 deg)
 }
 
 TEST_CASE("drift: holds on the reference cars across throttle and steering positions") {
@@ -139,7 +152,7 @@ TEST_CASE("drift: holds on the reference cars across throttle and steering posit
         RunConfig cfg;
         cfg.vehicle = d;
         cfg.assists = makePreset(DrivingPreset::Drift);
-        for (Real steer : {0.0, 0.5, 1.0})
+        for (Real steer : {0.5, 0.75, 1.0})
             for (Real thr : {0.6, 0.8, 1.0})
                 for (Real kmh : {40.0, 58.0}) {
                     const DriftResult r = driftHold(cfg, steer, thr, kmh, 8.0);
