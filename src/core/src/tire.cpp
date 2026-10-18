@@ -53,13 +53,24 @@ Real MagicFormulaTire::pureLateral(Real fz, Real alpha, Real muScale, Real cambe
 }
 
 TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const SurfaceProperties& surf,
-                                      Real speed, Real camber) const {
+                                      Real speed, Real camber, Real gripScale) const {
     TireForces out;
     if (fz <= 0) return out;
 
-    const Real wet = 1.0 / (1.0 + std::max(0.0, surf.wetSpeedFalloff) * std::abs(speed));
-    const Real muScale = std::max(0.0, surf.frictionScale) * wet;
+    const Real wet = 1.0 / (1.0 + std::max(0.0, surf.wetSpeedFalloff * p_.aquaplaneSensitivity) * std::abs(speed));
+    const Real compound = (1 + clamp(surf.wetness, 0.0, 1.0) * (p_.wetGrip - 1)) *
+                          (1 + clamp(surf.looseness, 0.0, 1.0) * (p_.looseGrip - 1));
+    const Real base = std::max(0.0, surf.frictionScale) * wet * std::max(0.0, compound) * std::max(0.0, gripScale);
     const Real alpha = std::atan(tanAlpha);
+    // Camber and peak grip: lateral relative to leaning into the force
+    // direction (smooth sign of the slip angle), longitudinal from |gamma|.
+    Real muScaleY = base, muScaleX = base;
+    if (p_.camberGripLoss > 0 || p_.camberLongGripLoss > 0) {
+        const Real into = camber * std::tanh(alpha / 0.03);
+        muScaleY *= std::max(0.5, 1 - p_.camberGripLoss * (into - p_.camberOptimum) * (into - p_.camberOptimum));
+        muScaleX *= std::max(0.5, 1 - p_.camberLongGripLoss * camber * camber);
+    }
+    const Real muScale = muScaleX;
 
     auto combinedFx = [&](Real k) {
         const Real Bxa = p_.rBx1 * std::cos(std::atan(p_.rBx2 * k));
@@ -71,7 +82,7 @@ TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const 
     const Real Gyk = std::cos(p_.rCy1 * std::atan(Byk * kappa));
 
     out.fx = combinedFx(kappa);
-    out.fy = Gyk * pureLateral(fz, alpha, muScale, camber);
+    out.fy = Gyk * pureLateral(fz, alpha, muScaleY, camber);
 
     // Central-difference slope for the linearly implicit wheel-spin solve.
     constexpr Real h = 1e-4;
@@ -83,9 +94,16 @@ TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const 
     out.mz = -trail * out.fy + p_.camberTwist * fz * camber;
 
     const Real dfz = loadDelta(p_, fz);
-    out.muX = std::max(0.0, p_.muX * (1 + p_.muXLoadSensitivity * dfz)) * muScale;
-    out.muY = std::max(0.0, p_.muY * (1 + p_.muYLoadSensitivity * dfz)) * muScale;
+    out.muX = std::max(0.0, p_.muX * (1 + p_.muXLoadSensitivity * dfz)) * muScaleX;
+    out.muY = std::max(0.0, p_.muY * (1 + p_.muYLoadSensitivity * dfz)) * muScaleY;
     return out;
+}
+
+Real MagicFormulaTire::temperatureGrip(Real t) const {
+    // Cold rubber is hard and grips like a harder compound (floor 75%);
+    // overheated rubber blisters and goes greasy (floor 60%).
+    const Real x = (t - p_.optimalTemperature) / std::max(p_.temperatureWindow, 1.0);
+    return std::max(x < 0 ? 0.75 : 0.6, 1 - p_.temperatureGripLoss * x * x);
 }
 
 Real surfaceTextureHeight(const SurfaceProperties& s, Real x, Real y) {

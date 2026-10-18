@@ -45,6 +45,23 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 0 = stock) and the rear differential (−1 stock, 0 open, 1 locked, 2 clutch LSD) now and whenever
 the car is re-created.
 
+## Garage
+
+Setups go in and out as JSON (fields and units in
+[`ord/setup.hpp`](../src/core/include/ord/setup.hpp)). Write UTF-8 into
+`ord_text_buffer(n)` and call `ord_apply_setup()`. Only the fields present change. It returns
+1, or 0 with the reason in `ord_text()` / `ord_text_length()`. The car is rebuilt where it is,
+at the speed it had. `ord_setup_json(stock)` puts the current setup (or the stock one) into
+`ord_text()`. `ord_clear_setup()` restores the stock car. `ord_set_tyre_warmers(celsius)`
+(< 0 = ambient) sets the tread temperature now and on every re-creation.
+`ord_set_wind(wx, wy)` sets a steady wind in m/s, as the direction the air moves.
+
+`ord_garage_state()` returns `ord_garage_state_size()` doubles:
+- 0–11: airspeed, airflow yaw, front and rear downforce, drag, wing downforce, floor clearance
+  front and rear, wing stalled, floor stalled, ambient °C, air density.
+- Then 4 per wheel: camber (rad, negative = top in), tread °C, optimal °C, grip factor from
+  temperature.
+
 ## Two-wheelers
 
 `ord_bike_create(kind, x, y, yaw, speed)` (0 bicycle, 1 e-scooter, 2 sport motorcycle),

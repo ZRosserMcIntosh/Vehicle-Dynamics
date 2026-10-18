@@ -7,6 +7,8 @@
 // Specification: docs/benchmarks/benchmark-plan.md
 #pragma once
 
+#include <limits>
+
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -43,6 +45,9 @@ struct RunConfig {
     Real frameHz = 60.0;
     GroundPrefetchCache::Settings prefetchSettings;
     RunStats* stats = nullptr;   // optional output
+    // Tyre tread temperature at the start (deg C; NaN = ambient). For warm
+    // tyres pass the compound's optimal temperature ("tyre warmers").
+    Real tyreTemperature = std::numeric_limits<Real>::quiet_NaN();
     // Host-engine emulation: when > 0 the vehicle runs in ChassisMode::External
     // and a separate host integrator (different scheme, like an engine's)
     // steps at hostHz; the vehicle substeps hz / hostHz times per host step.

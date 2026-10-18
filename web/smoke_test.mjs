@@ -117,5 +117,27 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
           `dV ${(r[2] * 3.6).toFixed(0)} km/h, chest ${r[6].toFixed(0)} g, HIC ${r[7].toFixed(0)}, AIS4+ ${(100 * r[13]).toFixed(1)}%, verdict ${r[15]}`);
   }
 }
+// Garage: read the stock setup as JSON, fit slicks and a rear wing, warm the tyres; the readouts
+// show the wing's downforce and hot tyres. A malformed setup is refused with a reason.
+{
+  const text = () => new TextDecoder().decode(M.HEAPU8.slice(M._ord_text(), M._ord_text() + M._ord_text_length()));
+  const send = (json) => { const b = new TextEncoder().encode(json); M.HEAPU8.set(b, M._ord_text_buffer(b.length)); return M._ord_apply_setup(); };
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  M._ord_create(0, 0, 0, 0);
+  M._ord_setup_json(1);
+  const stock = JSON.parse(text());
+  check('garage stock setup JSON', stock.front && stock.rear && stock.gears.length > 0, `${stock.gears.length} gears, balance ${stock.brakeBalance.toFixed(2)}`);
+  check('garage rejects bad JSON', send('{"front": ') === 0 && text().length > 0, `"${text()}"`);
+  M._ord_set_tyre_warmers(90);
+  const ok = send(JSON.stringify({ front: { compound: 'slick', camberDeg: -3 }, rear: { compound: 'slick' }, rearWing: true, wingAngleDeg: 14 }));
+  const gs = () => new Float64Array(M.HEAPF64.buffer, M._ord_garage_state(), M._ord_garage_state_size());
+  for (let i = 0; i < 60 * 12; ++i) { M._ord_set_input(0, state()[7] < 50 ? 1 : 0.3, 0, 0, 0, 0); M._ord_advance(1 / 60); }
+  const g0 = gs();
+  check('garage setup applies (slicks, wing, -3 deg)', ok === 1 && g0[5] > 200 && g0[12] * 57.3 < -2 && g0[13] > 60,
+        `${(state()[7] * 3.6).toFixed(0)} km/h, wing ${g0[5].toFixed(0)} N, FL camber ${(g0[12] * 57.3).toFixed(1)} deg, FL ${g0[13].toFixed(0)} C (window ${g0[14].toFixed(0)} C)`);
+  M._ord_setup_json(0);
+  check('garage setup reads back', JSON.parse(text()).rear.compound === 'slick', '');
+  M._ord_clear_setup(); M._ord_set_tyre_warmers(-1);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

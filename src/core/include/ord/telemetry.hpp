@@ -26,10 +26,23 @@ struct WheelTelemetry {
     Real slipAngle = 0;      // rad, transient
     Real fx = 0, fy = 0;     // N, tire frame
     Real gripUsed = 0;       // |(fx / (muX Fz), fy / (muY Fz))|: 0 = no force, ~1 = at the limit
+    Real camber = 0;         // rad, to the road, usual sign (negative = top leaning toward the car)
+    Real temperature = 0;    // deg C, tread (thermal model; ambient otherwise)
     Real steerAngle = 0;     // rad, this wheel
     Real brakeTorque = 0;    // N*m commanded
     bool brakeLocked = false;
     int surfaceId = 0;
+};
+
+struct AeroTelemetry {
+    Real airspeed = 0;          // m/s, relative to the air (wind included)
+    Real yaw = 0;               // rad, airflow yaw angle
+    Real downforceFront = 0;    // N (body/floor at the front axle)
+    Real downforceRear = 0;     // N (body/floor at the rear axle + wing)
+    Real drag = 0;              // N
+    Real wingDownforce = 0;     // N
+    Real clearanceFront = 0, clearanceRear = 0;  // m, floor to ground (when modelled)
+    bool wingStalled = false, floorStalled = false;
 };
 
 struct TelemetryFrame {
@@ -48,6 +61,7 @@ struct TelemetryFrame {
     int gear = 0;
     Real clutchEngagement = 0;
     DrivetrainTelemetry drivetrain;
+    AeroTelemetry aero;
     AssistReport assists;
     std::uint64_t groundQueries = 0;  // cumulative GroundQuery calls by this vehicle
     std::size_t wheelCount = 0;

@@ -43,16 +43,16 @@ Prioritised by "what unlocks measurable driving quality soonest". Each item has 
 
 1. **Unsprung mass DOF** per corner (wheel hop, harshness). *Accept:* B20, B22 natural frequencies within 3% of analytic.
 2. **Multi-point contact patch** (5 → 8 samples, perimeter + centre, weighted plane fit). *Accept:* B19 curb load spikes converge with sample count. Rate × samples matrix published.
-3. **Kinematic suspension**: camber/toe/caster vs travel curves, then geometric solvers (MacPherson, double wishbone, solid axle), adapting KinetiForge's MIT solvers with attribution. *Accept:* analytic-geometry tests.
+3. **Kinematic suspension**: camber/toe/caster vs travel curves (linear camber gain and caster done in the garage), then geometric solvers (MacPherson, double wishbone, solid axle), adapting KinetiForge's MIT solvers with attribution. *Accept:* analytic-geometry tests.
 4. Anti-dive / anti-squat / roll-centre load paths.
 5. **Fixed-rate decision**: 120/240/360 Hz on rough-road benchmarks → default for LOD0.
 
 ## M3 — Tire depth
 
-1. Camber thrust; full MF 6.x coefficient support (`.tir`-style import, our own parameter sets only).
+1. Camber thrust (done; camber peak-grip model in the garage); full MF 6.x coefficient support (`.tir`-style import, our own parameter sets only).
 2. Wet model: water-film depth input, speed-dependent μ, hydroplaning onset (B21).
 3. Loose surfaces (gravel/dirt/grass curve shapes, rolling resistance).
-4. Thermal (surface/carcass), pressure and wear. Off by default outside SIMULATION. No refuelling gameplay.
+4. Thermal (surface/carcass), pressure and wear. Off by default outside SIMULATION. No refuelling gameplay. *Done (first step):* compounds, pressure and a one-node tread temperature in the tuning garage ([tuning-garage.md](architecture/tuning-garage.md)); carcass node, wear and pressure rise with heat remain.
 5. Self-aligning torque (MF Mz) → **force feedback** pipeline.
 
 ## M4 — Drivetrain & powertrains

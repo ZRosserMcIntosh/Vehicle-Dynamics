@@ -11,10 +11,12 @@
 #include <vector>
 #include <cmath>
 #include <memory>
+#include <string>
 
 #include "ord/crash.hpp"
 #include "ord/ground.hpp"
 #include "ord/presets.hpp"
+#include "ord/setup.hpp"
 #include "ord/two_wheeler.hpp"
 #include "ord/vehicle.hpp"
 #include "reference_vehicles.hpp"
@@ -210,6 +212,14 @@ struct Sim {
         int diffType = -1;  // -1 stock, 0 open, 1 locked, 2 clutch LSD
         double preload = 80, powerRamp = 0.45, coastRamp = 0.25;
     } tuning;
+    // Full garage setup (alignment, springs, dampers, tyres, brakes, gears,
+    // aero, environment) for car `setupCar`; applied before `tuning`.
+    bool hasSetup = false;
+    int setupCar = -1;
+    VehicleSetup setup;
+    std::string text;      // JSON in/out buffer shared with JS
+    Vec3 wind{};
+    double tyreWarmers = -1;  // deg C the tyres start at on (re)creation; < 0 = ambient
     // Two-wheeler (bicycle / e-scooter / motorcycle), driven instead of the car when present.
     std::unique_ptr<TwoWheeler> bike;
     TwoWheelerInput bikeInput;
@@ -402,10 +412,16 @@ void publish() {
 
 }  // namespace
 
+// The car as the garage set it up (stock when no setup was applied to it).
+VehicleDefinition currentDef() {
+    const VehicleDefinition stock = carByIndex(g.carIndex);
+    return g.hasSetup && g.setupCar == g.carIndex ? applySetup(stock, g.setup) : stock;
+}
+
 void applyTuning() {
     if (!g.vehicle) return;
     Vehicle& v = *g.vehicle;
-    const VehicleDefinition stock = carByIndex(g.carIndex);
+    const VehicleDefinition stock = currentDef();
     Real stockLock = 0;
     for (const auto& w : stock.wheels) stockLock = std::max(stockLock, w.maxSteerAngle);
     v.setSteeringLock(g.tuning.steerLock > 0 ? g.tuning.steerLock : stockLock);
@@ -536,11 +552,13 @@ void publishBike() {
 ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
     ensureGround();
     g.carIndex = carIndex;
-    g.vehicle = std::make_unique<Vehicle>(carByIndex(carIndex), g.assists);
+    g.vehicle = std::make_unique<Vehicle>(currentDef(), g.assists);
     if (!g.vehicle->isValid()) return 0;
     applyTuning();
     setupOccupants();
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
+    g.vehicle->setWind(g.wind);
+    if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
     g.accumulator = 0;
     g.input = {};
     publish();
@@ -550,6 +568,7 @@ ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
 ORD_EXPORT void ord_reset(double x, double y, double yaw) {
     if (!g.vehicle) return;
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
+    if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
     g.accumulator = 0;
     publish();
 }
@@ -662,6 +681,99 @@ ORD_EXPORT void ord_set_tuning(double steerLock, int diffType, double preload, d
     g.tuning = {steerLock, diffType, preload, powerRamp, coastRamp};
     applyTuning();
 }
+
+// ---- garage setup (JSON; see ord/setup.hpp for the fields and units) ----
+// JS writes UTF-8 JSON into ord_text_buffer(n) (n bytes, NUL added here), then
+// calls ord_apply_setup(). Returns 1, or 0 with the reason in ord_text().
+namespace {
+std::string g_textOut;
+void rebuildKeepingMotion() {
+    // A new set of parts: rebuild the car where it is, at the speed it had.
+    if (!g.vehicle) return;
+    const RigidBodyState b = g.vehicle->state();
+    const Real vx = g.vehicle->forwardSpeed();
+    g.vehicle = std::make_unique<Vehicle>(currentDef(), g.assists);
+    applyTuning();
+    setupOccupants();
+    g.vehicle->setChassisState(b);
+    g.vehicle->setRollingSpeed(vx);
+    g.vehicle->setWind(g.wind);
+    if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
+    publish();
+}
+}  // namespace
+
+ORD_EXPORT char* ord_text_buffer(int n) {
+    g.text.assign(static_cast<std::size_t>(std::max(n, 0)) + 1, '\0');
+    return g.text.data();
+}
+ORD_EXPORT const char* ord_text() { return g_textOut.c_str(); }
+ORD_EXPORT int ord_text_length() { return static_cast<int>(g_textOut.size()); }
+
+ORD_EXPORT int ord_apply_setup() {
+    VehicleSetup s = g.hasSetup && g.setupCar == g.carIndex ? g.setup : stockSetup(carByIndex(g.carIndex));
+    const std::string err = setupFromJson(std::string(g.text.c_str()), s);
+    if (!err.empty()) { g_textOut = err; return 0; }
+    const VehicleDefinition d = applySetup(carByIndex(g.carIndex), s);
+    const auto problems = d.validate();
+    if (!problems.empty()) { g_textOut = problems.front(); return 0; }
+    g.setup = s;
+    g.hasSetup = true;
+    g.setupCar = g.carIndex;
+    rebuildKeepingMotion();
+    g_textOut.clear();
+    return 1;
+}
+// Back to the car as it comes (also clears it for the next ord_create).
+ORD_EXPORT void ord_clear_setup() {
+    g.hasSetup = false;
+    rebuildKeepingMotion();
+}
+// The current setup of the current car (stock if none) as JSON in ord_text().
+ORD_EXPORT int ord_setup_json(int stock) {
+    const VehicleSetup s = !stock && g.hasSetup && g.setupCar == g.carIndex ? g.setup : stockSetup(carByIndex(g.carIndex));
+    g_textOut = setupToJson(s);
+    return static_cast<int>(g_textOut.size());
+}
+// Tyre warmers: start (and restart) the tyres at this tread temperature, deg C; < 0 = ambient.
+ORD_EXPORT void ord_set_tyre_warmers(double celsius) {
+    g.tyreWarmers = celsius;
+    if (g.vehicle) g.vehicle->setTyreTemperatures(celsius >= 0 ? celsius : g.vehicle->definition().aero.ambientTemperature);
+}
+// Steady wind, world frame (m/s, the direction the air moves toward).
+ORD_EXPORT void ord_set_wind(double wx, double wy) {
+    g.wind = {wx, wy, 0};
+    if (g.vehicle) g.vehicle->setWind(g.wind);
+}
+namespace {
+constexpr int kGarageState = 12 + 4 * kMaxWheels;
+std::array<double, kGarageState> g_garage{};
+}  // namespace
+// Garage readouts, refreshed on call: aero (airspeed, airflow yaw, front/rear
+// downforce, drag, wing downforce, floor clearance front/rear, wing stalled,
+// floor stalled, ambient C, air density), then per wheel: camber (rad,
+// negative = top in), tread temperature (C), the tyre's optimal temperature,
+// and its grip factor from temperature.
+ORD_EXPORT double* ord_garage_state() {
+    g_garage.fill(0);
+    if (!g.vehicle) return g_garage.data();
+    const Vehicle& v = *g.vehicle;
+    const TelemetryFrame& t = v.telemetry();
+    const AeroTelemetry& a = t.aero;
+    double* o = g_garage.data();
+    o[0] = a.airspeed; o[1] = a.yaw; o[2] = a.downforceFront; o[3] = a.downforceRear; o[4] = a.drag;
+    o[5] = a.wingDownforce; o[6] = a.clearanceFront; o[7] = a.clearanceRear;
+    o[8] = a.wingStalled ? 1 : 0; o[9] = a.floorStalled ? 1 : 0;
+    o[10] = v.definition().aero.ambientTemperature; o[11] = v.definition().aero.airDensity;
+    for (std::size_t w = 0; w < t.wheelCount; ++w) {
+        const TireParams& tp = v.definition().wheels[w].tire;
+        double* p = o + 12 + 4 * static_cast<int>(w);
+        p[0] = t.wheels[w].camber; p[1] = t.wheels[w].temperature; p[2] = tp.optimalTemperature;
+        p[3] = tp.thermalCapacity > 0 ? MagicFormulaTire(tp).temperatureGrip(t.wheels[w].temperature) : 1.0;
+    }
+    return g_garage.data();
+}
+ORD_EXPORT int ord_garage_state_size() { return kGarageState; }
 
 // ---- two-wheelers ----
 // kind: 0 bicycle, 1 e-scooter, 2 sport motorcycle. Rear contact at (x, y), heading yaw, rolling at speed.
