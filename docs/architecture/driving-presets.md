@@ -80,7 +80,7 @@ What it does (`AssistSystem::applyDriftSteer` / `applyDriftThrottle`):
 
 It changes nothing physical: tires, mass, inertia and grip are identical, and with `driftAssist = 0` it is fully gone (tested: the same entry with constant full lock spins).
 
-Measured with steady inputs after a handbrake entry (10 s, see [baseline-results.md](../benchmarks/baseline-results.md)): the reference sports car and the Rosser Stella V8 hold 17° / 24° / 32° within about 1° for steering 0.5 / 0.75 / 1 at 60-100 % throttle, with no spins; holding full steering and full throttle settles at a 34-43 m radius at 59-68 km/h. Centred steering straightens the car within about 0.7 s, without a swing to the other side. With keyboard-style input (digital keys, the page's steering ramp), releasing the turn once the car travels in the wanted direction ends ~12° past it, every time. Two of these values are in the golden baseline.
+Measured with steady inputs after a handbrake entry (10 s, see [baseline-results.md](../benchmarks/baseline-results.md)): the reference sports car and the Rosser Stella V8 hold 17° / 24° / 31.5° within about 1° for steering 0.5 / 0.75 / 1 at full throttle, and the smaller angles 60 % throttle asks for (15° / 21° / 28°) just as closely, with no spins; holding full steering and full throttle ends the 10 s at 50-58 km/h. Centred steering straightens the car within about 0.7 s, without a swing to the other side. With keyboard-style input (digital keys, the page's steering ramp), releasing the turn once the car travels in the wanted direction ends ~12° past it, every time. Two of these values are in the golden baseline.
 
 ### Related fixes for everyone who drifts without the assist
 
