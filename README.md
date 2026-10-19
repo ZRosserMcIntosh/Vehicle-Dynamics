@@ -9,12 +9,22 @@ off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
 > passes 129 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
-> (Apple Clang) and Windows (MSVC). It includes unsprung mass, a multi-point
-> tire contact patch with geometric envelope probes for sharp edges, a
-> per-frame ground-query cache, host (Chaos) integration with vehicle-local
-> substepping, three fidelity tiers (player / nearby AI / traffic), parameter
-> validation plus a runtime fault guard, a zero-allocation steady state
-> (tested), and a golden benchmark baseline that CI checks.
+> (Apple Clang), Windows (MSVC) and WebAssembly. It includes unsprung mass, a
+> multi-point tire contact patch with geometric envelope probes for sharp
+> edges, a per-frame ground-query cache, host (Chaos) integration with
+> vehicle-local substepping, three fidelity tiers (player / nearby AI /
+> traffic), parameter validation plus a runtime fault guard, a
+> zero-allocation steady state (tested), and a golden benchmark baseline that
+> CI checks. On top of that: a **tuning garage** (alignment, two-stage
+> dampers, tyre compounds with pressure and temperature, aerodynamics with
+> floor and wing stall), a **drift assist** that also lets you spin donuts,
+> **crash survivability** with crash-test dummies, and rideable
+> **two-wheelers**.
+>
+> **Try it:** the same core, compiled to WebAssembly, drives the
+> [browser proving ground](https://zrossermcintosh.com/sao-paulo/driving/)
+> (garage on <kbd>U</kbd>); [how it works](https://zrossermcintosh.com/sao-paulo/physics/).
+>
 > **The Unreal Engine 5 plugin source is written but has not been compiled
 > yet**, so no car has been driven in Unreal. There is no Unreal Engine in
 > the development environment. Treat the plugin as a draft until it builds on
@@ -39,28 +49,39 @@ any developer.
 
 | Area | Implemented | Verified by |
 |---|---|---|
-| Tire | Reduced Pacejka Magic Formula: load sensitivity, combined slip, relaxation-length transient slip, standstill stiffness. **Parameter generator** from public tire size/category | `tests/test_tire.cpp` |
-| Contact & suspension | **Multi-point contact patch** (1/5/8/9 samples), **implicit unsprung-mass DOF** per corner, springs/dampers/ARB/bump stops, **procedural surface micro-texture** for paving | `tests/test_contact.cpp` (frequencies match the analytic quarter car to <0.1%) |
+| Tire | Reduced Pacejka Magic Formula: load sensitivity, combined slip, relaxation-length transient slip, standstill stiffness, **camber thrust** and a camber peak-grip model (best ~2° into the turn), wet grip and aquaplaning, loose-surface grip, a one-node **tread temperature** with a grip window, inflation pressure. **Parameter generator** from public tire size/category | `tests/test_tire.cpp`, `tests/test_garage.cpp` |
+| Contact & suspension | **Multi-point contact patch** (1/5/8/9 samples), **implicit unsprung-mass DOF** per corner, springs, **two-stage (slow/fast) dampers**, ARB, bump stops, wheel camber from static camber, camber gain, caster and body roll, **procedural surface micro-texture** for paving | `tests/test_contact.cpp` (frequencies match the analytic quarter car to <0.1%) |
 | Drivetrain | Engine curve, governor, limiter, clutch, gearbox, open/locked/LSD diffs, AWD split, all solved implicitly with stick/slip friction | `tests/test_drivetrain.cpp` |
-| Assists | Speed-sensitive gamepad steering (full countersteer reachable in a slide), ABS, brake-based TCS, ESC, countersteer aid, **drift assist** (steering sets the drift angle; countersteer and throttle trim only), auto/manual shifting. Real actuators only; every intervention reported | `tests/test_assists.cpp` |
+| Assists | Speed-sensitive gamepad steering (full countersteer reachable in a slide), ABS, brake-based TCS, ESC, countersteer aid, **drift assist** (steering sets the drift angle and throttle holds it; countersteer and throttle trim only; full lock and throttle from a crawl spins **donuts**), auto/manual shifting, an auto clutch that opens with the handbrake like a drifter's foot. Real actuators only; every intervention reported ([presets and drift assist](docs/architecture/driving-presets.md)) | `tests/test_assists.cpp` |
 | Lightness | **Ground prefetch cache** (per-frame adaptive strips; no scene queries from substeps or the physics thread), **vehicle-local substepping** inside a 60 Hz world, **host integration mode** for Chaos | `tests/test_contact.cpp`, `tests/test_host.cpp` |
 | Many vehicles | LOD1 nearby AI (`Vehicle` at low fidelity + lane-following driver), LOD2 kinematic traffic (IDM), `LodManager` with seamless promotion | `tests/test_lod.cpp` |
 | Robustness | Range validation of every definition field (incl. static-support and unsprung-mass sanity), `faulted()` runtime guard against non-finite state, fuzzed definitions, reversals, zero speed/reverse, contact loss, long-duration drift, determinism | `tests/test_robustness.cpp`, `tests/test_alloc.cpp` |
-| Vehicle range | FWD hatch, RWD sports, AWD saloon, 750 kg high-downforce race car (~1.7 g at 100 km/h → ~2.5 g at 250 km/h), ~476 km/h AWD hypercar | `tests/test_robustness.cpp` |
+| Vehicle range | FWD hatch, RWD sports, AWD saloon, 750 kg high-downforce race car (~1.7 g at 100 km/h → ~2.5 g at 250 km/h), ~476 km/h AWD hypercar, the Rosser Stella V8 (9,000 rpm, 7-speed DCT, 0–100 km/h in 3.8 s) | `tests/test_robustness.cpp` |
 | Regression guard | 13 headline metrics in `benchmarks/baseline.csv` with per-metric tolerances; changing them needs an explicit, reviewed regeneration | `tests/test_baseline.cpp` |
 | Tooling | Telemetry ring buffer + CSV, engine-agnostic debug draw (+SVG), `ordbench` report | `tools/ordbench` |
 | Crash survivability | Each impact's delta-V becomes a crumple-zone crash pulse; a torso + head occupant per seat (belt, airbags, door, wheel/dash) gives chest 3 ms g, HIC15 and injury risk from NHTSA's published curves, plus the Joksch delta-V statistic. A game estimate, not a validated crash simulation ([details](docs/architecture/crash-survivability.md)) | `tests/test_crash.cpp` (56 km/h belted frontal in the NCAP range; orderings for speed, pulse, belts, airbags, side) |
 | Tuning garage | `VehicleSetup` in setup-sheet units: camber / toe / caster / camber gain (ground camber from geometry and body roll), springs, ride height, two-stage dampers, ARBs, **tyre compounds** (off-road … slick, rain) with **pressure and tread temperature**, brake balance, diff and gears, **aero** (ride-height-sensitive floor with stall, rear wing with a real stall, wind and yaw, altitude via the ISA, ported from Aviation Dynamics), JSON save/load ([details](docs/architecture/tuning-garage.md)) | `tests/test_garage.cpp` (compound ladders dry/wet/gravel, camber vs braking, brake-balance spin, wing stall, floor stall, crosswind) |
 | Two-wheelers (prototype) | **Benchmark bicycle**: nonlinear 4-body single-track multibody model (Whipple rolling contact or tyres with **camber thrust and a rounded crown** on any ground). **Rideable** bicycle, e-scooter and sport motorcycle: virtual rider (counter-steer emerges), brakes, ABS, traction and wheelie control. No suspension or gearbox yet ([plan and limits](docs/architecture/two-wheelers.md)) | `tests/test_single_track.cpp` (Meijaard et al. 2007 weave/capsize speeds reproduced to ~1e-11 m/s), `tests/test_two_wheeler.cpp` |
+| Browser build | `web/`: C ABI over the core compiled to WebAssembly (Emscripten or wasi-sdk), with the proving ground, city heightfield and colliders, crash dummies, two-wheelers and garage setups (JSON) exposed to JavaScript | `web/smoke_test.mjs` (CI) |
 | Unreal Engine 5 | Plugin `plugin/OpenRoadDynamics`: component, Chaos sim callback, game-thread ground prefetch, debug overlay. **Not compiled yet** | — |
 
 Selected results for the fictional 300 kW RWD reference car ([full report](docs/benchmarks/baseline-results.md)):
 
 | | FUN | SPORT | SIMULATION |
 |---|---|---|---|
-| 0–100 km/h | 5.2 s | 4.7 s | 6.3 s (wheelspin, no TCS) |
-| 100–0 km/h | 39.6 m (ABS) | 39.6 m (ABS) | 48.2 m (locked wheels) |
-| Skidpad R40 | 0.96 g | 1.02 g | 1.00 g |
+| 0–100 km/h | 5.1 s | 4.6 s | 5.6 s (wheelspin, no TCS) |
+| 100–0 km/h | 39.0 m (ABS) | 39.0 m (ABS) | 47.7 m (locked wheels) |
+| Skidpad R40 | 0.91 g | 1.00 g | 1.00 g |
+
+And what the garage changes on the same car ([tuning garage](docs/architecture/tuning-garage.md)):
+
+| | Off-road | Street | Slick | Rain |
+|---|---|---|---|---|
+| Skidpad, dry (warm tyres) | 0.76 g | 0.83 g | 0.94 g | 0.79 g |
+| Skidpad, deep water | 0.40 g | 0.47 g | 0.22 g | 0.56 g |
+| Skidpad, gravel | 0.62 g | 0.50 g | 0.37 g | 0.50 g |
+
+Cold slicks give 0.74 g. A rear wing at 200 km/h makes 1,394 N at 24° and stalls past that (920 N at 30°). More negative camber costs braking (39.0 m at 0°, 42.6 m at −6°).
 
 **How light is it?** Headless core only, single-threaded on a 2.1 GHz cloud Xeon.
 This measures physics, ground-cache management and the analytic test ground. It does
@@ -70,9 +91,9 @@ logic, so it is not a claim about how many vehicles a game can run
 
 | Scene | CPU per 60 fps frame | Engine ground rays per frame |
 |---|---|---|
-| Player car: 60 Hz world × 4 substeps, 5-point contact + envelope probes, ground cache | ~0.06 ms | ~24 |
-| + 16 nearby AI cars (LOD1) + 300 traffic cars (LOD2) | ~0.37 ms total | ~108 total |
-| + 1000 traffic cars instead of 300 | ~0.69 ms total | ~150 total |
+| Player car: 60 Hz world × 4 substeps, 5-point contact + envelope probes, ground cache | ~0.07 ms | ~24 |
+| + 16 nearby AI cars (LOD1) + 300 traffic cars (LOD2) | ~0.44 ms total | ~108 total |
+| + 1000 traffic cars instead of 300 | ~0.71 ms total | ~150 total |
 
 On curbs and potholes, the cached 60 Hz × 4 configuration is within ~5–8% of a 2000 Hz reference (rate-fair, 60 Hz-window metrics), at ~4× fewer rays than direct 240 Hz querying ([ADR-0003](docs/decisions/ground-prefetch.md), [risks & budget](docs/architecture/performance-and-risks.md)).
 
@@ -85,7 +106,7 @@ Requires CMake ≥ 3.20 and a C++20 compiler.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure      # 94 test cases
+ctest --test-dir build --output-on-failure      # 129 test cases
 ./build/ordbench                                # Markdown benchmark report
 ./build/ordbench --csv-dir /tmp/traces          # per-step telemetry CSV for plotting
 ./build/ordbench --write-baseline               # regenerate benchmarks/baseline.csv (reviewed changes only)
@@ -133,9 +154,11 @@ plugin/            Unreal Engine 5 plugin (draft, not yet compiled)
 src/vehicles/      fictional reference vehicle definitions
 src/scenarios/     reproducible benchmark manoeuvres
 tools/ordbench/    benchmark report generator
+web/               WebAssembly bindings and smoke test for the browser demo
 tests/             unit, regression and benchmark tests (no dependencies)
 docs/research/     Forza public research, telemetry, KinetiForge audit, alternatives, tire parameters
-docs/architecture/ architecture, drivetrain solver, presets, open world & LOD
+docs/architecture/ architecture, drivetrain solver, presets & drift assist, open world & LOD,
+                   tuning garage, crash survivability, two-wheelers, performance & risks
 docs/benchmarks/   benchmark plan, telemetry channels, baseline results
 docs/decisions/    architecture decision records
 docs/roadmap.md    milestones and priorities
@@ -158,9 +181,10 @@ being quoted.
 
 ## Roadmap
 
-Next: compile and validate the UE5 plugin (Chaos parity < 1%, real ray costs)
-→ proving-ground level and Chaos Vehicles A/B → wet roads → kinematic
-suspension → multiplayer. See [docs/roadmap.md](docs/roadmap.md).
+Next: a test bench for setups (scripted manoeuvres, side-by-side setup
+comparison, parameter sweeps) → kinematic suspension from hardpoints → compile
+and validate the UE5 plugin (Chaos parity < 1%, real ray costs) → proving-ground
+level and Chaos Vehicles A/B → multiplayer. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Versioning
 

@@ -29,6 +29,16 @@ Prioritised by "what unlocks measurable driving quality soonest". Each item has 
 - [x] Versioning and release policy ([RELEASING.md](RELEASING.md))
 - [~] Plugin static audit and proving-ground preparation: **still not compiled against Unreal**
 
+## After v0.3 — Drift, crashes, two-wheelers and the tuning garage
+
+- [x] Drift assist: steering sets the angle, throttle holds it, centred steering straightens without a swing back; donuts at full lock from a crawl; auto clutch opens with the handbrake ([driving-presets.md](architecture/driving-presets.md))
+- [x] Browser build (`web/`): WebAssembly bindings and a CI smoke test for the online proving ground
+- [x] Rideable bicycle, e-scooter and sport motorcycle on the single-track model (M7)
+- [x] Crash survivability: crash pulses, belted/airbag occupants, chest g, HIC15, injury risk ([crash-survivability.md](architecture/crash-survivability.md))
+- [x] Tuning garage: alignment and camber geometry, two-stage dampers, tyre compounds with pressure and temperature, brake balance, gears, aero with floor and wing stall, wind and altitude, JSON setups ([tuning-garage.md](architecture/tuning-garage.md))
+- [ ] Test bench: scripted manoeuvres, side-by-side setup comparison, parameter sweeps
+- [ ] Kinematic suspension from hardpoints (M2.3)
+
 ## M1 — Unreal Engine 5 adapter (next: compile and validate)
 
 1. **Plugin skeleton** `plugin/OpenRoadDynamics` (Runtime + Editor modules). `UOpenRoadVehicleComponent` owns an `ord::Vehicle`. Build on UE 5.4+. *Accept:* compiles on Win64 with UE 5.4/5.5/5.6. Car drives on the proving-ground level.
@@ -85,6 +95,7 @@ Bicycles, e-scooters/e-bikes and motorcycles at car-level fidelity. Plan, result
 
 ## Next five engineering priorities
 
+0. Garage test bench (scripted manoeuvres, setup comparison, sweeps), then kinematic suspension from hardpoints (M2.3)
 1. Compile the UE5 plugin on UE 5.4–5.6 and resolve the API assumptions recorded in its audit (M1.1–M1.3)
 2. Build the proving-ground level from the documented steps and drive the first car in Unreal; record headless-vs-Chaos parity (< 1% target on B1/B2/B4/B5) and real ray costs (M1.2, M1.6)
 3. Tire cleat-test calibration to settle the 5- vs 8-sample contact layout sensitivity (~30% on sharp curbs) and add continuous effective-road-profile enveloping (M2.2)
