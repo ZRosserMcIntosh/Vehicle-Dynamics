@@ -117,6 +117,25 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
           `dV ${(r[2] * 3.6).toFixed(0)} km/h, chest ${r[6].toFixed(0)} g, HIC ${r[7].toFixed(0)}, AIS4+ ${(100 * r[13]).toFixed(1)}%, verdict ${r[15]}`);
   }
 }
+// Rollover: the proving ground's one-sided ramp lifts the left wheels 0.9 m and drops them. Fast
+// enough, a car goes over (the tall, heavy S 600 Guard first); the low, wide F1 car never does.
+{
+  const y = M._ord_roll_ramp_lane_y();
+  const run = (car, kmh) => {
+    M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+    M._ord_create(car, -415, y, 0);
+    let minUp = 1, faulted = false;
+    for (let i = 0; i < 60 * 25; ++i) {
+      const s = state(), v = s[7], past = s[0] > -265, want = kmh / 3.6;
+      M._ord_set_input(0, past ? 0 : v < want - 1 ? 1 : v < want ? 0.3 : 0, past || v > want + 1 ? 0.3 : 0, 0, 0, 0); M._ord_advance(1 / 60);
+      const s2 = state(); minUp = Math.min(minUp, s2[36]); faulted = faulted || s2[23] !== 0;
+    }
+    return { minUp, faulted };
+  };
+  const slow = run(0, 50), fast = run(0, 110), guard = run(9, 75), f1 = run(10, 120);
+  check('rollover ramp', !slow.faulted && !fast.faulted && !guard.faulted && !f1.faulted && slow.minUp > 0.7 && fast.minUp < 0 && guard.minUp < 0 && f1.minUp > 0.7,
+        `upright min: sports 50 km/h ${slow.minUp.toFixed(2)}, 110 km/h ${fast.minUp.toFixed(2)}; Guard 75 km/h ${guard.minUp.toFixed(2)}; F1 120 km/h ${f1.minUp.toFixed(2)}`);
+}
 // Garage: read the stock setup as JSON, fit slicks and a rear wing, warm the tyres; the readouts
 // show the wing's downforce and hot tyres. A malformed setup is refused with a reason.
 {

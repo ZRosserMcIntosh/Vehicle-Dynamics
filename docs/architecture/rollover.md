@@ -47,6 +47,17 @@ Telemetry: `upright` (body z-axis · world z, so −1 is on the roof), `bodyCont
 | Sliding sideways on flat asphalt at 80 km/h | no roll: tyre grip alone can't trip a car this low |
 | Normal driving | the hull never touches |
 
+## In the browser demo
+
+- The proving ground has a rollover area (`ord_roll_ramp_lane_y`, `ord_roll_kerb_y`):
+  - a one-sided ramp that lifts the left wheels 0.9 m over 10 m and ends in a drop (a
+    corkscrew): the S 600 Guard goes over from ~70 km/h, the sports car from ~90 km/h, and the
+    F1 car not even at 120 km/h (checked in `web/smoke_test.mjs`);
+  - a 25 cm trip kerb to slide sideways into.
+- Wall and post hits are 3D impulses through the full inverse inertia, applied at the CoM height
+  clamped to the obstacle's height. A low obstacle is hit below the CoM and can trip the car.
+- The state buffer carries `upright`, the hull contact count and the hull force (header 36–38).
+
 ## Limits
 
 - Rigid body: no crush of the roof or pillars, and nothing breaks off. Crash survivability does

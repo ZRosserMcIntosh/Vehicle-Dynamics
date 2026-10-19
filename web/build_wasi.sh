@@ -11,7 +11,7 @@ OUT=${1:-"$HERE/dist"}
 : "${WASI_SDK:?set WASI_SDK to the wasi-sdk directory}"
 mkdir -p "$OUT"
 EXPORTS=""
-for f in ord_create ord_reset ord_set_preset ord_set_aids ord_set_input ord_advance ord_state ord_state_header ord_state_per_wheel ord_ground_height ord_bump_lane_y ord_proving_bump_y ord_proving_split_y ord_set_world ord_city_heights ord_city_classes ord_city_colliders ord_city_commit ord_set_drift_assist ord_set_tuning ord_bike_create ord_bike_remove ord_bike_set_assists ord_bike_set_input ord_bike_advance ord_bike_state ord_bike_state_size ord_set_occupants ord_occupant_state ord_crash_lane_y ord_crash_barrier_x ord_crash_pole_x ord_text_buffer ord_text ord_text_length ord_apply_setup ord_clear_setup ord_setup_json ord_set_tyre_warmers ord_set_wind ord_garage_state ord_garage_state_size; do
+for f in ord_create ord_reset ord_set_preset ord_set_aids ord_set_input ord_advance ord_state ord_state_header ord_state_per_wheel ord_ground_height ord_bump_lane_y ord_proving_bump_y ord_proving_split_y ord_set_world ord_city_heights ord_city_classes ord_city_colliders ord_city_commit ord_set_drift_assist ord_set_tuning ord_bike_create ord_bike_remove ord_bike_set_assists ord_bike_set_input ord_bike_advance ord_bike_state ord_bike_state_size ord_set_occupants ord_occupant_state ord_crash_lane_y ord_crash_barrier_x ord_crash_pole_x ord_roll_kerb_y ord_roll_ramp_lane_y ord_text_buffer ord_text ord_text_length ord_apply_setup ord_clear_setup ord_setup_json ord_set_tyre_warmers ord_set_wind ord_garage_state ord_garage_state_size; do
   EXPORTS="$EXPORTS -Wl,--export=$f"
 done
 "$WASI_SDK/bin/clang++" --target=wasm32-wasip1 --sysroot="$WASI_SDK/share/wasi-sysroot" \

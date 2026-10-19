@@ -74,6 +74,11 @@ Real bumpLaneHeight(Real x, Real y) {
 constexpr Real kPgBumpY = -30.0;
 constexpr Real kPgSplitY = -55.0;
 constexpr Real kPgX0 = -440.0, kPgX1 = -110.0;
+// Rollover area south of the split-mu lane: a 25 cm trip kerb along y = kRollKerbY (slide sideways
+// into it), and a one-sided ramp under the left wheels of the lane y = kRollRampLaneY that lifts
+// them 0.9 m over 10 m and ends in a drop (a corkscrew).
+constexpr Real kRollKerbY = -120.0, kRollKerbX0 = -420.0, kRollKerbX1 = -300.0;
+constexpr Real kRollRampLaneY = -87.0, kRollRampX0 = -265.0, kRollRampX1 = -255.0, kRollRampH = 0.9;
 // Crash-test lane north of the skidpads: run-up from x = -440, barrier at x = -150.
 constexpr Real kCrashLaneY = 125.0, kCrashBarrierX = -150.0, kCrashPoleX = -230.0;
 
@@ -106,7 +111,21 @@ Real provingBumpHeight(Real x, Real y) {
     return h;
 }
 
+Real rolloverHeight(Real x, Real y) {
+    // trip kerb: 60 cm wide, 25 cm high, a 5 cm rounded nose on the approach side
+    if (x > kRollKerbX0 && x < kRollKerbX1 && y < kRollKerbY && y > kRollKerbY - 0.6) {
+        const Real e = kRollKerbY - y;
+        return e < 0.05 ? 0.25 * std::sin(0.5 * kPi * e / 0.05) : 0.25;
+    }
+    // corkscrew ramp: the strip from 0.4 m left of the lane centre to 4 m
+    if (x > kRollRampX0 && x < kRollRampX1 && y > kRollRampLaneY + 0.4 && y < kRollRampLaneY + 4.0)
+        return kRollRampH * (x - kRollRampX0) / (kRollRampX1 - kRollRampX0);
+    return 0.0;
+}
+
 Real provingGroundHeight(Real x, Real y) {
+    if (y < kRollKerbY + 0.1 && y > kRollKerbY - 1 && x > kRollKerbX0 && x < kRollKerbX1) return rolloverHeight(x, y);
+    if (y > kRollRampLaneY && y < kRollRampLaneY + 5 && x > kRollRampX0 && x < kRollRampX1) return rolloverHeight(x, y);
     if (y > kBumpLaneY - 4 && y < kBumpLaneY + 4 && x > 40 && x < 300) return bumpLaneHeight(x, y);
     if (y > kPgBumpY - 4 && y < kPgBumpY + 4 && x > kPgX0 && x < kPgX1) return provingBumpHeight(x, y);
     return 0.0;
@@ -239,7 +258,7 @@ struct Sim {
 Sim g;
 constexpr Real kStep = 1.0 / 360.0;
 // Frame state exported to JavaScript (see web/README.md for the layout).
-constexpr int kHeader = 36, kPerWheel = 17;
+constexpr int kHeader = 39, kPerWheel = 17;
 std::array<double, kHeader + kPerWheel * kMaxWheels> g_out{};
 
 VehicleDefinition carByIndex(int i) {
@@ -297,7 +316,7 @@ void resolveCollisions() {
     for (const auto& w : d.wheels) { xf = std::max(xf, w.suspension.hardpoint.x); xr = std::min(xr, w.suspension.hardpoint.x); hw = std::max(hw, std::abs(w.suspension.hardpoint.y)); }
     xf += 1.0; xr -= 1.15; hw += 0.16;
     const double ex = 0.5 * (xf - xr), ey = hw, cxl = 0.5 * (xf + xr);
-    const double m = d.mass, izz = std::max(d.inertia.z, 1.0);
+    const double m = d.mass;
     bool changed = false;
     for (int iter = 0; iter < 4; ++iter) {
         Vec3 u = b.orientation.rotate({1, 0, 0}); u.z = 0;
@@ -307,7 +326,7 @@ void resolveCollisions() {
         const double cx = b.position.x + u.x * cxl, cy = b.position.y + u.y * cxl;
         const double zc = b.position.z;
         // deepest contact this iteration
-        double best = 0, nx = 0, ny = 0, px = 0, py = 0;
+        double best = 0, nx = 0, ny = 0, px = 0, py = 0, bestZ0 = 0, bestZ1 = 0;
         const int gi = std::clamp(static_cast<int>((cx - g.col.gx0) / g.col.gcell), 0, g.col.gn - 1);
         const int gj = std::clamp(static_cast<int>((cy - g.col.gy0) / g.col.gcell), 0, g.col.gn - 1);
         auto obbProj = [&](double ax, double ay) { return ex * std::abs(u.x * ax + u.y * ay) + ey * std::abs(vx * ax + vy * ay); };
@@ -334,7 +353,7 @@ void resolveCollisions() {
                         if (o < minO) { minO = o; const double sg = (o1 < o2) ? -1 : 1; mx = A[0] * sg; my = A[1] * sg; }
                     }
                     if (sep || minO <= best) continue;
-                    best = minO; nx = mx; ny = my;
+                    best = minO; nx = mx; ny = my; bestZ0 = s.z0; bestZ1 = s.z1;
                     // contact point: segment point closest to the box centre
                     const double t = std::clamp((cx - s.ax) * sx + (cy - s.ay) * sy, 0.0, sl);
                     px = s.ax + sx * t; py = s.ay + sy * t;
@@ -350,7 +369,7 @@ void resolveCollisions() {
                         if (ox < oy) { pen = ox + c.r; lnx = lx > 0 ? -1 : 1; lny = 0; } else { pen = oy + c.r; lnx = 0; lny = ly > 0 ? -1 : 1; }
                     }
                     if (pen <= best) continue;
-                    best = pen; nx = lnx * u.x + lny * vx; ny = lnx * u.y + lny * vy;
+                    best = pen; nx = lnx * u.x + lny * vx; ny = lnx * u.y + lny * vy; bestZ0 = c.z0; bestZ1 = c.z1;
                     px = cx + qx * u.x + qy * vx; py = cy + qx * u.y + qy * vy;
                 }
             }
@@ -358,20 +377,31 @@ void resolveCollisions() {
         if (best <= 0) break;
         // positional correction (slightly more than the overlap)
         b.position.x += nx * (best + 0.002); b.position.y += ny * (best + 0.002);
-        // impulse at the contact point
+        // Impulse at the contact point, in 3D: the hit can pitch and roll the car as well as
+        // yaw it. The contact height is the CoM's, kept within the obstacle's vertical extent,
+        // so a low wall or post hits below the CoM and can trip a car sliding into it.
         const Vec3 com = b.position + b.orientation.rotate(d.centerOfMass);
-        const double rx = px - com.x, ry = py - com.y;
-        const double vcx = b.velocity.x - b.angularVelocity.z * ry, vcy = b.velocity.y + b.angularVelocity.z * rx;
-        const double vn = vcx * nx + vcy * ny;
+        const Vec3 n{nx, ny, 0};
+        const Vec3 cp{px, py, std::clamp(com.z, bestZ0 + 0.05, std::max(bestZ0 + 0.05, bestZ1 - 0.05))};
+        const Vec3 r = cp - com;
+        const Mat3 R = b.orientation.toMatrix();
+        const Mat3 invI = R * Mat3::diagonal({1 / std::max(d.inertia.x, 1.0), 1 / std::max(d.inertia.y, 1.0), 1 / std::max(d.inertia.z, 1.0)}) * R.transposed();
+        const Vec3 vc = b.velocity + cross(b.angularVelocity, r);
+        const double vn = dot(vc, n);
         if (vn < 0) {
-            const double rn = rx * ny - ry * nx;
+            auto invMass = [&](const Vec3& dir) { const Vec3 rd = cross(r, dir); return 1 / m + dot(rd, invI * rd); };
             const double e = vn < -6 ? 0.15 : 0.05;
-            const double jn = -(1 + e) * vn / (1 / m + rn * rn / izz);
-            const double tx = -ny, ty = nx, vt = vcx * tx + vcy * ty, rt = rx * ty - ry * tx;
-            double jt = -vt / (1 / m + rt * rt / izz);
-            const double mu = 0.35; jt = std::clamp(jt, -mu * jn, mu * jn);
-            b.velocity.x += (jn * nx + jt * tx) / m; b.velocity.y += (jn * ny + jt * ty) / m;
-            b.angularVelocity.z += (rn * jn + rt * jt) / izz;
+            const double jn = -(1 + e) * vn / invMass(n);
+            Vec3 jv = n * jn;
+            const Vec3 vt = vc - n * vn;
+            const double vtl = length(vt);
+            if (vtl > 1e-6) {
+                const Vec3 t = vt * (1 / vtl);
+                const double mu = 0.35;
+                jv = jv - t * std::min(vtl / invMass(t), mu * jn);
+            }
+            b.velocity = b.velocity + jv * (1 / m);
+            b.angularVelocity = b.angularVelocity + invI * cross(r, jv);
             g.impact = std::max(g.impact, -vn);
         }
         changed = true;
@@ -402,6 +432,7 @@ void publish() {
     o[30] = static_cast<double>(t.groundQueries); o[31] = g.impact; g.impact = 0;
     o[32] = t.assists.driftActive ? 1 : 0; o[33] = t.assists.driftTargetSideslip;
     o[34] = t.assists.driftThrottleCut; o[35] = t.assists.driftSteerAngle;
+    o[36] = t.upright; o[37] = static_cast<double>(t.bodyContacts); o[38] = t.bodyContactForce;
     for (std::size_t w = 0; w < t.wheelCount; ++w) {
         const WheelTelemetry& wt = t.wheels[w];
         const WheelDef& wd = d.wheels[w];
@@ -875,5 +906,7 @@ ORD_EXPORT double* ord_occupant_state(int seat) {
 }
 // Crash-test lane: y, barrier x, pole x (pole centre is 16 m north of the lane centre, 30 cm across).
 ORD_EXPORT double ord_crash_lane_y() { return kCrashLaneY; }
+ORD_EXPORT double ord_roll_kerb_y() { return kRollKerbY; }
+ORD_EXPORT double ord_roll_ramp_lane_y() { return kRollRampLaneY; }
 ORD_EXPORT double ord_crash_barrier_x() { return kCrashBarrierX; }
 ORD_EXPORT double ord_crash_pole_x() { return kCrashPoleX; }

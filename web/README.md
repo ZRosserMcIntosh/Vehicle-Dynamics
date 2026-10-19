@@ -26,7 +26,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 
 ## State buffer
 
-`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 36-value header, then 17 values per wheel (`ord_state_per_wheel()`).
+`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 39-value header, then 17 values per wheel (`ord_state_per_wheel()`).
 
 | Header | Meaning | Wheel | Meaning |
 |---|---|---|---|
@@ -42,6 +42,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 | 27–30 | steer/throttle/brake input, ground queries | 14–15 | ESC brake torque, surface id |
 | 31 | largest impact speed this frame (m/s, city world) | | |
 | 32–35 | drift assist active, target sideslip (rad), throttle cut, steering change (rad) | 16 | grip used (0 = none, ~1 = at the limit) |
+| 36–38 | upright (body z · world z: 1 upright, −1 on the roof), body hull points touching the ground, their total normal force (N) | | |
 
 `ord_set_tuning(steerLock, diffType, preload, powerRamp, coastRamp)` sets the steering lock (rad,
 0 = stock) and the rear differential (−1 stock, 0 open, 1 locked, 2 clutch LSD) now and whenever
