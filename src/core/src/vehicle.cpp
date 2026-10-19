@@ -721,6 +721,11 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
     // ---- 3. Implicit drivetrain + wheel spin + longitudinal slip ----
     DrivetrainCommand dc;
     dc.throttle = cmd.throttle;
+    if (def_.topSpeedLimit > 0) {
+        // electronic top-speed limiter (e.g. 250 km/h): throttle fades over the last 2 %
+        const Real over = (std::abs(forwardSpeed()) - 0.98 * def_.topSpeedLimit) / (0.02 * def_.topSpeedLimit);
+        dc.throttle *= 1.0 - clamp(over, 0.0, 1.0);
+    }
     dc.clutchEngagement = cmd.clutchEngagement;
     dc.gear = cmd.gear;
     drivetrain_.step(dt, dc, solveIn.data(), solveOut.data());

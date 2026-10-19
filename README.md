@@ -8,7 +8,7 @@ enjoyment on a gamepad and Forza Motorsport-level consequences with every aid
 off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
-> passes 129 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
+> passes 135 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
 > (Apple Clang), Windows (MSVC) and WebAssembly. It includes unsprung mass, a
 > multi-point tire contact patch with geometric envelope probes for sharp
 > edges, a per-frame ground-query cache, host (Chaos) integration with
@@ -57,6 +57,7 @@ any developer.
 | Many vehicles | LOD1 nearby AI (`Vehicle` at low fidelity + lane-following driver), LOD2 kinematic traffic (IDM), `LodManager` with seamless promotion | `tests/test_lod.cpp` |
 | Robustness | Range validation of every definition field (incl. static-support and unsprung-mass sanity), `faulted()` runtime guard against non-finite state, fuzzed definitions, reversals, zero speed/reverse, contact loss, long-duration drift, determinism | `tests/test_robustness.cpp`, `tests/test_alloc.cpp` |
 | Vehicle range | FWD hatch, RWD sports, AWD saloon, 750 kg high-downforce race car (~1.7 g at 100 km/h → ~2.5 g at 250 km/h), ~476 km/h AWD hypercar, the Rosser Stella V8 (9,000 rpm, 7-speed DCT, 0–100 km/h in 3.8 s) | `tests/test_robustness.cpp` |
+| Real-car approximations | Porsche 911 Carrera S and 4S (992.2), Mercedes-AMG S 63 4MATIC+ and S 600 Guard (W222, VR9 armoured, 4.2 t), a 2026-regulation Formula 1 car, from published specifications (estimates marked), with electronic top-speed limiters ([details and limits](docs/architecture/production-cars.md)) | `tests/test_production.cpp` (0–100 km/h and top speed against the published figures) |
 | Regression guard | 13 headline metrics in `benchmarks/baseline.csv` with per-metric tolerances; changing them needs an explicit, reviewed regeneration | `tests/test_baseline.cpp` |
 | Tooling | Telemetry ring buffer + CSV, engine-agnostic debug draw (+SVG), `ordbench` report | `tools/ordbench` |
 | Crash survivability | Each impact's delta-V becomes a crumple-zone crash pulse; a torso + head occupant per seat (belt, airbags, door, wheel/dash) gives chest 3 ms g, HIC15 and injury risk from NHTSA's published curves, plus the Joksch delta-V statistic. A game estimate, not a validated crash simulation ([details](docs/architecture/crash-survivability.md)) | `tests/test_crash.cpp` (56 km/h belted frontal in the NCAP range; orderings for speed, pulse, belts, airbags, side) |
@@ -106,7 +107,7 @@ Requires CMake ≥ 3.20 and a C++20 compiler.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure      # 129 test cases
+ctest --test-dir build --output-on-failure      # 135 test cases
 ./build/ordbench                                # Markdown benchmark report
 ./build/ordbench --csv-dir /tmp/traces          # per-step telemetry CSV for plotting
 ./build/ordbench --write-baseline               # regenerate benchmarks/baseline.csv (reviewed changes only)

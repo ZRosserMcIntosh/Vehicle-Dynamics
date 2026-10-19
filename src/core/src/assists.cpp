@@ -304,8 +304,11 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
             downshiftBlip_ = false;
             // Engine-speed-based engagement (like a centrifugal / launch clutch):
             // disengages to prevent stalling, engages fully above launch rpm.
+            // (a high-idle engine - a racing engine idles at ~4,000 rpm - launches at least 50 %
+            // above idle; road cars' launch rpm is already above that)
             const Real lo = s.idleRpm * 1.05;
-            cmd.clutchEngagement = smoothstep((s.engineRpm - lo) / std::max(cfg_.launchRpm - lo, 100.0));
+            const Real launch = std::max(cfg_.launchRpm, 1.5 * s.idleRpm);
+            cmd.clutchEngagement = smoothstep((s.engineRpm - lo) / std::max(launch - lo, 100.0));
         }
         // Handbrake: a driver puts the clutch in while pulling it, or the engine just keeps driving
         // the rear wheels it is trying to lock (with the throttle held, the handbrake would do

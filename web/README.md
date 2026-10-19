@@ -15,7 +15,9 @@ Without Emscripten, `WASI_SDK=/path/to/wasi-sdk web/build_wasi.sh` builds the sa
 becomes `ord.mjs` and exposes the identical `_ord_*` / `HEAPF64` interface.
 
 Cars (`ord_create` index): 0 Sports RWD, 1 Hatch FWD, 2 Saloon AWD, 3 Hypercar AWD, 4 Race car,
-5 Rosser Stella V8 (flat-plane V8, 9,000 rpm; the São Paulo World game's own car).
+5 Rosser Stella V8 (flat-plane V8, 9,000 rpm; the São Paulo World game's own car), and approximations of real
+cars from published figures (`src/vehicles/production_vehicles.hpp`): 6 Porsche 911 Carrera S, 7 911 Carrera 4S,
+8 Mercedes-AMG S 63 4MATIC+, 9 Mercedes-Benz S 600 Guard, 10 Formula 1 car (2026 regulations).
 
 The proving ground (bump lane heights, wet and rough patches) is defined in `ord_web.cpp`
 (including the default-start proving ground west of the drag strip: graded bump course, split-mu lane,

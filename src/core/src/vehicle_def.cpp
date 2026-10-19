@@ -21,6 +21,7 @@ std::string VehicleDefinition::validate() const {
     if (!inRange(centerOfMass.x, -10, 10) || !inRange(centerOfMass.y, -10, 10) || !inRange(centerOfMass.z, -10, 10))
         return "centerOfMass must be finite and within 10 m of the body origin";
     if (!inRange(steeringAckermann, 0, 1)) return "steeringAckermann must be within 0..1";
+    if (!inRange(topSpeedLimit, 0, 200)) return "topSpeedLimit must be within 0..200 m/s (0 = none)";
     if (wheels.empty() || wheels.size() > kMaxWheels) return "wheel count must be 1..kMaxWheels";
     if (axles.empty() || axles.size() > kMaxAxles) return "axle count must be 1..kMaxAxles";
     for (std::size_t i = 0; i < wheels.size(); ++i) {

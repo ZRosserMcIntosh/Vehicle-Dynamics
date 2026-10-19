@@ -19,6 +19,7 @@
 #include "ord/setup.hpp"
 #include "ord/two_wheeler.hpp"
 #include "ord/vehicle.hpp"
+#include "production_vehicles.hpp"
 #include "reference_vehicles.hpp"
 
 #ifdef __EMSCRIPTEN__
@@ -248,6 +249,11 @@ VehicleDefinition carByIndex(int i) {
         case 3: return vehicles::referenceHypercarAwd();
         case 4: return vehicles::referenceRaceDownforce();
         case 5: return vehicles::rosserStellaV8();
+        case 6: return vehicles::porsche911CarreraS();
+        case 7: return vehicles::porsche911Carrera4S();
+        case 8: return vehicles::mercedesAmgS63();
+        case 9: return vehicles::mercedesS600Guard();
+        case 10: return vehicles::formula1Car2026();
         default: return vehicles::referenceSportsRwd();
     }
 }

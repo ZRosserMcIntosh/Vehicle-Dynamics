@@ -17,7 +17,7 @@ done
 "$WASI_SDK/bin/clang++" --target=wasm32-wasip1 --sysroot="$WASI_SDK/share/wasi-sysroot" \
   -std=c++20 -O3 -fno-exceptions -fno-rtti -Wall -Wextra -mexec-model=reactor \
   -I"$REPO/src/core/include" -I"$REPO/src/vehicles" \
-  "$HERE/ord_web.cpp" "$REPO"/src/core/src/*.cpp "$REPO/src/vehicles/reference_vehicles.cpp" \
+  "$HERE/ord_web.cpp" "$REPO"/src/core/src/*.cpp "$REPO/src/vehicles/reference_vehicles.cpp" "$REPO/src/vehicles/production_vehicles.cpp" \
   $EXPORTS -Wl,--initial-memory=67108864 -Wl,--max-memory=67108864 -Wl,--strip-all \
   -o "$OUT/ord.wasm"
 cp "$HERE/ord_wasi_loader.mjs" "$OUT/ord.mjs"

@@ -102,6 +102,7 @@ struct VehicleDefinition {
     std::vector<WheelDef> wheels;  // ordered; axles reference them
     std::vector<AxleDef> axles;    // front to rear
     Real steeringAckermann = 0.6;  // 0 = parallel, 1 = full Ackermann
+    Real topSpeedLimit = 0.0;      // m/s, electronic limiter: throttle fades over the last 2% (0 = none)
     DrivetrainDef drivetrain;
     AeroDef aero;
 

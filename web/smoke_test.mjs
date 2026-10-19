@@ -139,5 +139,13 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
   check('garage setup reads back', JSON.parse(text()).rear.compound === 'slick', '');
   M._ord_clear_setup(); M._ord_set_tyre_warmers(-1);
 }
+// Real-car approximations (6-10): each creates and pulls away cleanly.
+for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG S 63'], [9, 'S 600 Guard'], [10, 'F1 2026']]) {
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  const ok = M._ord_create(idx, 0, 0, 0) === 1;
+  for (let i = 0; i < 60 * 3; ++i) { M._ord_set_input(0, 1, 0, 0, 0, 0); M._ord_advance(1 / 60); }
+  const st = state();
+  check(`${name} drives`, ok && st[23] === 0 && st[7] * 3.6 > 50, `${(st[7] * 3.6).toFixed(0)} km/h after 3 s`);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

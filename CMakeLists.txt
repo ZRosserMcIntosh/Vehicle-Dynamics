@@ -47,7 +47,7 @@ target_include_directories(ord_core PUBLIC src/core/include)
 target_compile_options(ord_core PRIVATE ${ORD_WARNINGS})
 
 # ---- Reference vehicle definitions (fictional, for benchmarks) ----
-add_library(ord_vehicles src/vehicles/reference_vehicles.cpp)
+add_library(ord_vehicles src/vehicles/reference_vehicles.cpp src/vehicles/production_vehicles.cpp)
 add_library(ord::vehicles ALIAS ord_vehicles)
 target_include_directories(ord_vehicles PUBLIC src/vehicles)
 target_link_libraries(ord_vehicles PUBLIC ord_core)
