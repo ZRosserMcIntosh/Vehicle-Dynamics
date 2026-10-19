@@ -38,6 +38,7 @@ add_library(ord_core
   src/core/src/tire_generator.cpp
   src/core/src/single_track.cpp
   src/core/src/two_wheeler.cpp
+  src/core/src/crash.cpp
 )
 add_library(ord::core ALIAS ord_core)
 target_include_directories(ord_core PUBLIC src/core/include)

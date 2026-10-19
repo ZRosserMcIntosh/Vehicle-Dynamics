@@ -99,5 +99,23 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
   check('motorcycle wheelie assist', bs()[1] === 0 && pmax > 0.3 && pmax < 0.6, `peak pitch ${(pmax * 57.3).toFixed(0)} deg`);
   M._ord_bike_remove();
 }
+// Crash dummies: a 50 km/h run into the track's concrete barrier gives both front-seat dummies a
+// frontal crash report with a plausible delta-V and occupant loads.
+{
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  const y = M._ord_crash_lane_y(), xb = M._ord_crash_barrier_x();
+  M._ord_create(0, xb - 60, y, 0);
+  M._ord_set_occupants(1, 1, 1);
+  for (let i = 0; i < 60 * 8; ++i) {
+    const v = state()[7];
+    M._ord_set_input(0, v < 50 / 3.6 ? 1 : 0, 0, 0, 0, 0); M._ord_advance(1 / 60);
+  }
+  for (const seat of [0, 1]) {
+    const o = new Float64Array(M.HEAPF64.buffer, M._ord_occupant_state(seat), 24);
+    const r = o.slice(7, 23);
+    check(`crash dummy ${seat} report`, o[6] >= 1 && r[0] === 1 && r[1] === 1 && r[2] * 3.6 > 40 && r[2] * 3.6 < 70 && r[6] > 15 && r[6] < 60 && r[15] >= 0,
+          `dV ${(r[2] * 3.6).toFixed(0)} km/h, chest ${r[6].toFixed(0)} g, HIC ${r[7].toFixed(0)}, AIS4+ ${(100 * r[13]).toFixed(1)}%, verdict ${r[15]}`);
+  }
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

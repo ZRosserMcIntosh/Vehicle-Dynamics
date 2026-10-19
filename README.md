@@ -8,7 +8,7 @@ enjoyment on a gamepad and Forza Motorsport-level consequences with every aid
 off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
-> passes 109 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
+> passes 115 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
 > (Apple Clang) and Windows (MSVC). It includes unsprung mass, a multi-point
 > tire contact patch with geometric envelope probes for sharp edges, a
 > per-frame ground-query cache, host (Chaos) integration with vehicle-local
@@ -49,6 +49,7 @@ any developer.
 | Vehicle range | FWD hatch, RWD sports, AWD saloon, 750 kg high-downforce race car (~1.7 g at 100 km/h → ~2.5 g at 250 km/h), ~476 km/h AWD hypercar | `tests/test_robustness.cpp` |
 | Regression guard | 13 headline metrics in `benchmarks/baseline.csv` with per-metric tolerances; changing them needs an explicit, reviewed regeneration | `tests/test_baseline.cpp` |
 | Tooling | Telemetry ring buffer + CSV, engine-agnostic debug draw (+SVG), `ordbench` report | `tools/ordbench` |
+| Crash survivability | Each impact's delta-V becomes a crumple-zone crash pulse; a torso + head occupant per seat (belt, airbags, door, wheel/dash) gives chest 3 ms g, HIC15 and injury risk from NHTSA's published curves, plus the Joksch delta-V statistic. A game estimate, not a validated crash simulation ([details](docs/architecture/crash-survivability.md)) | `tests/test_crash.cpp` (56 km/h belted frontal in the NCAP range; orderings for speed, pulse, belts, airbags, side) |
 | Two-wheelers (prototype) | **Benchmark bicycle**: nonlinear 4-body single-track multibody model (Whipple rolling contact or tyres with **camber thrust and a rounded crown** on any ground). **Rideable** bicycle, e-scooter and sport motorcycle: virtual rider (counter-steer emerges), brakes, ABS, traction and wheelie control. No suspension or gearbox yet ([plan and limits](docs/architecture/two-wheelers.md)) | `tests/test_single_track.cpp` (Meijaard et al. 2007 weave/capsize speeds reproduced to ~1e-11 m/s), `tests/test_two_wheeler.cpp` |
 | Unreal Engine 5 | Plugin `plugin/OpenRoadDynamics`: component, Chaos sim callback, game-thread ground prefetch, debug overlay. **Not compiled yet** | — |
 
