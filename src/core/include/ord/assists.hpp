@@ -112,6 +112,7 @@ struct AssistReport {
     bool shifting = false;
     Real donut = 0;                 // 0..1, drift assist standing aside so the car can spin (donuts)
     Real handbrakeClutch = 0;       // 0..1, auto clutch opened by the handbrake
+    bool clutchKick = false;        // drift assist is kicking the clutch to break the rear loose
 };
 
 class AssistSystem {
@@ -170,6 +171,8 @@ private:
     bool donutLatch_ = false;  // a donut was asked for (full lock + throttle from low speed, not mid-drift)
     Real hbClutch_ = 0;        // 0..1, auto clutch held open by the handbrake
     Real hbHold_ = 0;          // 0..1, handbrake pulled (fades out over 0.3 s after release)
+    Real kickTimer_ = 0;       // s left in a drift-initiation clutch kick
+    Real kickCooldown_ = 0;    // s until the next kick is allowed
     Real prevBeta_ = 0, betaRate_ = 0;  // body sideslip and its filtered rate
     std::array<Real, kMaxWheels> tcBrake_{};  // brake-based traction control, per wheel (N*m)  // rev-match the engine during the current downshift
 };

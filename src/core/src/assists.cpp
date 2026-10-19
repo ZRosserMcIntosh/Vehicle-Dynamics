@@ -159,12 +159,18 @@ Real AssistSystem::applyDriftSteer(Real angle, const VehicleSensors& s) {
     // integral trims the steady offset. Same structure as a drifter: the front wheels catch it.
     const Real frontTravel = std::atan2(s.lateralVelocity + s.cgToFrontAxle * s.yawRate, vx);
     constexpr Real kApproach = 2.5;   // 1/s, how quickly the angle is pulled to the target
-    constexpr Real kMaxRate = 0.9;    // rad/s, largest wanted rate of change of the drift angle
+    constexpr Real kMaxRate = 1.8;    // rad/s, largest wanted rate of change of the drift angle while it opens
+                                      // up: the rear swings out (oversteer you can feel) before it is caught
     constexpr Real kRate = 0.35;      // rad of steering per rad/s of rate error
     constexpr Real kInt = 0.6;        // rad of steering per rad*s of angle error
     // Straightening out is gentler than opening up, so the yaw momentum is gone by the time the
     // car is straight.
-    const Real maxRate = std::abs(betaT) < std::abs(beta) ? 0.55 : kMaxRate;
+    // ... but only while there is room to catch it: the front wheels can hold a drift up to about
+    // the steering lock, so the opening slows as the angle nears it (a swing past it is a spin).
+    const Real room = clamp((maxAngle + 0.08 - std::abs(beta)) / 0.3, 0.35, 1.0);
+    // With part throttle there is less power to hold the angle the swing reaches: open slower.
+    const Real power01 = clamp((throttleState_ - 0.5) / 0.4, 0.0, 1.0);
+    const Real maxRate = std::abs(betaT) < std::abs(beta) ? 0.55 : kMaxRate * (0.5 + 0.5 * power01) * room;
     const Real rateWanted = clamp(-kApproach * (beta - betaT), -maxRate, maxRate);
     driftI_ = clamp(driftI_ + kInt * (beta - betaT) * s.dt * driftWeight_, -0.15, 0.15);
     const Real want = clamp(frontTravel + kRate * (betaRate_ - rateWanted) + driftI_, -s.maxSteerAngle, s.maxSteerAngle);
@@ -196,10 +202,11 @@ void AssistSystem::applyDriftThrottle(const VehicleSensors& s, ActuatorCommands&
     // other way (a pendulum the player then has to catch). Steering does the rest.
     // Nothing to trim while the handbrake holds the clutch open (the engine is not driving the
     // wheels), and a cut built up then would starve the clutch kick on release.
-    if (hbClutch_ > 0.05) driftCut_ = 0;
+    if (hbClutch_ > 0.05 || kickTimer_ > 0) driftCut_ = 0;
     else if (over > 0 && rotatingAway && cmd.throttle > 0) driftCut_ += s.dt * 6.0 * over / 0.1;
     else driftCut_ -= s.dt * 2.5;
-    driftCut_ = clamp(driftCut_, 0.0, 0.6);
+    // ... and less of it on a light throttle, where the drift needs all the power there is.
+    driftCut_ = clamp(driftCut_, 0.0, 0.6 * clamp((throttleState_ - 0.3) / 0.5, 0.2, 1.0));
     // Soft limiter: the gearbox holds its gear through a drift, so the engine can reach the rev
     // limiter, whose fuel cut drives the rear in pulses that make the angle wobble and the drift
     // fade. Easing the throttle over the last 4 % of the rev range lets it hover just below.
@@ -253,8 +260,19 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
                 const Real here = s.gearRpm[static_cast<std::size_t>(gear_)], next = s.gearRpm[static_cast<std::size_t>(gear_ + 1)];
                 driftUpshift = here > 0 && next > 0 && s.engineRpm * next / here > 0.6 * s.limiterRpm;
             }
-            if (s.engineRpm > up && gear_ < s.forwardGears && (!spinning || driftUpshift)) requestShift(gear_ + 1);
-            else if (s.engineRpm < down && gear_ > 1) requestShift(gear_ - 1);
+            // (at drift speeds a spinning rear is the drift itself, not a burnout: allow it there)
+            if (drifting && thr > 0.8 && s.speed > 8.0 && std::abs(betaRate_) < 0.5 && s.engineRpm > 0.97 * s.limiterRpm && gear_ < s.forwardGears) {
+                const Real here = s.gearRpm[static_cast<std::size_t>(gear_)], next = s.gearRpm[static_cast<std::size_t>(gear_ + 1)];
+                driftUpshift = driftUpshift || (here > 0 && next > 0 && s.engineRpm * next / here > 0.6 * s.limiterRpm);
+            }
+            // Downshifts wait while drifting under power (the shift's clutch gap lets the rear
+            // grip and kills the drift) and just after a handbrake pull, when the revs are low
+            // only because the rear was locked.
+            const bool holdDown = (drifting && s.engineRpm > 0.25 * s.limiterRpm) || hbHold_ > 0;
+            // (a drift upshift does not wait for the usual shift point: the drift's soft limiter
+            // holds the revs just below it)
+            if (gear_ < s.forwardGears && ((s.engineRpm > up && !spinning) || driftUpshift)) requestShift(gear_ + 1);
+            else if (s.engineRpm < down && gear_ > 1 && !holdDown) requestShift(gear_ - 1);
         }
         // Drive/reverse selection when (nearly) stopped.
         if (std::abs(s.speed) < 0.5) {
@@ -298,7 +316,31 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
         for (std::size_t w = 0; w < s.wheelCount; ++w) hbOnDriven = hbOnDriven || (s.wheelDriven[w] && s.handbrakeTorque[w] > 0);
         const Real hbWanted = hbOnDriven ? smoothstep((clamp(in.handbrake, 0.0, 1.0) - 0.1) / 0.3) : 0.0;
         hbClutch_ = hbWanted > hbClutch_ ? hbWanted : approach(hbClutch_, hbWanted, s.dt / 0.15);
+        // Drift initiation (DRIFT assist only, an aid): turning in hard with the throttle pinned
+        // at speed, the car would push wide on its front tyres before the rear lets go. Like a
+        // drifter, the aid kicks the clutch: open for ~0.15 s while the revs flare, then dump
+        // it, which spins the rear up and breaks it loose. Once per turn-in.
+        kickCooldown_ = std::max(0.0, kickCooldown_ - s.dt);
+        bool rearDriven = false;
+        for (std::size_t w = 0; w < s.wheelCount; ++w) rearDriven = rearDriven || (s.wheelDriven[w] && !s.wheelIsFront[w]);
+        if (cfg_.driftAssist > 0 && rearDriven && kickTimer_ <= 0 && kickCooldown_ <= 0 && gear_ >= 1 && shiftTimer_ <= 0 &&
+            s.speed > 8.0 && std::abs(steerState_) > 0.6 && throttleState_ > 0.7 && driftWeight_ <= 0 && hbClutch_ < 0.05 &&
+            std::abs(rearAxleSlip(s)) < 0.08 && s.engineRpm < 0.9 * s.limiterRpm) {
+            kickTimer_ = 0.15;
+            kickCooldown_ = 2.0;
+        }
+        if (kickTimer_ > 0) {
+            kickTimer_ -= s.dt;
+            cmd.clutchEngagement = 0;
+        }
+        report_.clutchKick = kickTimer_ > 0;
         cmd.clutchEngagement *= 1 - hbClutch_;
+        // With the clutch held open (handbrake), keep the free-revving engine just under the
+        // limiter instead of bouncing off it: revs ready for the kick, and no machine-gun limiter.
+        if (hbClutch_ > 0.5 || kickTimer_ > 0) {
+            const Real hold = 0.88 * s.limiterRpm;
+            cmd.throttle *= clamp((hold - s.engineRpm) / (0.05 * s.limiterRpm), 0.0, 1.0);
+        }
     } else {
         cmd.clutchEngagement = 1.0 - clamp(in.clutch, 0.0, 1.0);
         hbClutch_ = 0;

@@ -268,16 +268,19 @@ TEST_CASE("drift: easing off the lock ends a donut; the assist catches it withou
     fullLockFullThrottle(vehicles::referenceSportsRwd(), makePreset(DrivingPreset::Drift), 0.0, 6.0, &v);
     FlatGround ground;
     DriverInput in;
-    in.steer = 0.2;
     in.throttle = 0.5;
-    Real lastBeta = 0;
+    Real lastBeta = 0, donutAfterEase = 1;
     bool spun = false;
     for (int i = 0; i < 360 * 4; ++i) {
+        // ease off the lock (a small drift is still asked for), then centre the steering
+        in.steer = i < 360 ? 0.2 : 0.0;
         v->step(1.0 / 360, in, ground);
+        if (i == 359) donutAfterEase = v->telemetry().assists.donut;
         lastBeta = v->telemetry().sideslip;
         spun = spun || std::abs(lastBeta) > 1.4;
     }
-    std::printf("    4 s after easing off: sideslip %.1f deg, yaw %.2f rad/s, %.0f km/h\n", lastBeta * 57.3,
+    CHECK(donutAfterEase < 0.05);
+    std::printf("    eased off, then centred for 3 s: sideslip %.1f deg, yaw %.2f rad/s, %.0f km/h\n", lastBeta * 57.3,
                 v->telemetry().yawRate, v->telemetry().speed * 3.6);
     CHECK(!spun);
     CHECK(std::abs(lastBeta) < 0.1);
@@ -420,4 +423,76 @@ TEST_CASE("drift: a longer steering lock (angle kit) holds deeper drifts without
     CHECK(kit.entered && !kit.spun);
     CHECK(kit.meanSideslip < stock.meanSideslip - 0.25);  // >14 deg deeper
     CHECK(std::abs(kit.meanSideslip - kit.meanTarget) < 0.05);
+}
+
+namespace {
+// Keyboard-style drift attempt, like the browser demo: digital steering ramped at 3/s toward full
+// lock, from 60 km/h in the DRIFT preset. `hb` = handbrake window, `liftUntil` = throttle off
+// until then (else pinned).
+struct Attempt {
+    Real firstTenDegAt = -1;  // s after turning in, |sideslip| > 10 deg
+    bool kicked = false, spun = false;
+    Real maxRpmClutchOpen = 0;
+    int gearAtRelease = 0, minGearAfterRelease = 99;
+    Real meanThrottleRatio = 0;  // throttle out / in over the held drift
+};
+Attempt keyboardAttempt(Real hbFrom, Real hbTo, Real liftUntil) {
+    Vehicle v(vehicles::rosserStellaV8(), makePreset(DrivingPreset::Drift));
+    FlatGround ground;
+    v.reset({0, 0, 0.6}, 0, ground);
+    v.setRollingSpeed(60 / 3.6);
+    DriverInput in;
+    Attempt a;
+    Real kb = 0, ratio = 0;
+    int n = 0;
+    const Real dt = 1.0 / 360, limiter = v.definition().drivetrain.engine.limiterRpm;
+    for (int i = 0; i < 360 * 5; ++i) {
+        const Real t = i * dt;
+        const Real target = t > 0.5 ? 1.0 : 0.0;
+        kb += std::clamp(target - kb, -3 * dt, 3 * dt);
+        in.steer = kb;
+        in.throttle = t < 0.5 ? 0.3 : (t < liftUntil ? 0.0 : 1.0);
+        in.handbrake = (t > hbFrom && t < hbTo) ? 1.0 : 0.0;
+        v.step(dt, in, ground);
+        const auto& tel = v.telemetry();
+        a.kicked = a.kicked || tel.assists.clutchKick;
+        if (a.firstTenDegAt < 0 && std::abs(tel.sideslip) > 0.1745) a.firstTenDegAt = t - 0.5;
+        if (tel.assists.handbrakeClutch > 0.9) a.maxRpmClutchOpen = std::max(a.maxRpmClutchOpen, tel.drivetrain.engineRpm / limiter);
+        if (hbTo > 0 && std::abs(t - hbTo) < dt / 2) a.gearAtRelease = tel.gear;
+        if (hbTo > 0 && t > hbTo && t < hbTo + 0.6) a.minGearAfterRelease = std::min(a.minGearAfterRelease, tel.gear);
+        if (t > 2.5 && in.throttle > 0.5) { ratio += tel.throttleOut / in.throttle; ++n; }
+        a.spun = a.spun || std::abs(tel.sideslip) > 1.4;
+    }
+    a.meanThrottleRatio = n ? ratio / n : 0;
+    return a;
+}
+}  // namespace
+
+TEST_CASE("drift: turning in on the throttle breaks the rear loose (clutch kick), no push wide") {
+    // Before: full steering and full throttle at 60 km/h pushed wide on the front tyres for ~0.6 s
+    // before the rear let go. The DRIFT assist now kicks the clutch on turn-in, like a drifter.
+    const Attempt a = keyboardAttempt(-1, -1, 0);
+    std::printf("    keyboard turn-in at 60 km/h: kick %d, 10 deg of sideslip %.2f s after turning in\n", a.kicked, a.firstTenDegAt);
+    CHECK(a.kicked);
+    CHECK(a.firstTenDegAt > 0 && a.firstTenDegAt < 0.65);
+    CHECK(!a.spun);
+    // and in the drift the throttle still works: the engine isn't pinned on the limiter with half
+    // the pedal taken away (before: ~50% of the throttle cut, stuck in 2nd)
+    std::printf("    held drift, full throttle: %.0f%% of the pedal reaches the engine\n", 100 * a.meanThrottleRatio);
+    CHECK(a.meanThrottleRatio > 0.75);
+}
+
+TEST_CASE("drift: handbrake with the throttle held keeps the revs off the limiter; no downshift on release") {
+    // Handbrake + throttle: the clutch is open, so the engine free-revs. It is held just under
+    // the limiter instead of bouncing off it.
+    const Attempt held = keyboardAttempt(0.7, 1.1, 0);
+    std::printf("    clutch open: peak %.0f%% of the limiter\n", 100 * held.maxRpmClutchOpen);
+    CHECK(held.maxRpmClutchOpen < 0.93);
+    CHECK(!held.spun);
+    // Lift, handbrake, then power: the box used to drop a gear right after the release (the revs
+    // were low only because the rear had been locked) and the shift's clutch gap killed the drift.
+    const Attempt lift = keyboardAttempt(0.7, 1.1, 1.1);
+    std::printf("    gear at release %d, lowest in the next 0.6 s %d\n", lift.gearAtRelease, lift.minGearAfterRelease);
+    CHECK(lift.minGearAfterRelease >= lift.gearAtRelease);
+    CHECK(!lift.spun);
 }
