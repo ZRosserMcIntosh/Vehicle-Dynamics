@@ -8,7 +8,7 @@ enjoyment on a gamepad and Forza Motorsport-level consequences with every aid
 off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
-> passes 139 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
+> passes 140 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
 > (Apple Clang), Windows (MSVC) and WebAssembly. It includes unsprung mass, a
 > multi-point tire contact patch with geometric envelope probes for sharp
 > edges, a per-frame ground-query cache, host (Chaos) integration with
@@ -108,7 +108,7 @@ Requires CMake ≥ 3.20 and a C++20 compiler.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure      # 139 test cases
+ctest --test-dir build --output-on-failure      # 140 test cases
 ./build/ordbench                                # Markdown benchmark report
 ./build/ordbench --csv-dir /tmp/traces          # per-step telemetry CSV for plotting
 ./build/ordbench --write-baseline               # regenerate benchmarks/baseline.csv (reviewed changes only)

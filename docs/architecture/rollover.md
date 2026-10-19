@@ -29,7 +29,7 @@ ground gets a stiff, damped normal force plus sliding friction. The stiffness an
 capped by the effective mass that point sees (mass and inertia about the CoM), so the explicit
 integration stays stable for any definition.
 
-Past ~53° of tilt (`up.z < 0.6`) a tyre's support fades out, and it is gone by ~70°. Its contact
+Past ~53° of tilt (`up.z < 0.6`) a tyre's support fades out along a smoothstep, and it is gone by ~70°. Its contact
 ray along the car's own −z then points well off to the side and would prop the car back up. The
 tilt is measured against the vertical, not the local ground normal, because kerb edges have
 steep local normals under an upright car.
@@ -64,4 +64,4 @@ Telemetry: `upright` (body z-axis · world z, so −1 is on the roof), `bodyCont
   not score rollovers.
 - The hull is coarse (21 points). An edge can sink between points on a sharp ridge.
 - Tyre sidewall forces are not modelled. Between ~53° and ~70° the tyre's support fades out
-  linearly rather than following a real sidewall.
+  along a smoothstep rather than following a real sidewall.

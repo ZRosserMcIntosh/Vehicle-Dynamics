@@ -69,8 +69,10 @@ tilted back by λ, front axle. Contact modes:
   - **Arbitrary ground**: one vertical ray per wheel per step gives that wheel
     a local plane (point, normal, surface), so the bike rides over bumps,
     slopes and the browser's city heightfield.
-  The car model passes camber 0 and keeps its flat footprint: its behaviour
-  and benchmark numbers are unchanged.
+  The car model keeps its flat footprint. When this was added cars passed camber 0, so their
+  behaviour and benchmark numbers were unchanged; since the tuning garage they pass their real
+  camber, and the car camber model is enabled by `applySetup()` (stock definitions keep camber
+  stiffness 0, so the baseline is unchanged).
 
 Dynamics: Newton–Euler equations with constraints at acceleration level
 (`(J M⁻¹ Jᵀ) λ = −J̇v − J M⁻¹ F`), classical RK4, then mass-weighted position
@@ -218,7 +220,7 @@ Native cost is about 19 µs per 2 ms step (motorcycle), about 1% of a core at
 ### 1. Single-track base and bicycle (~2.5 months)
 
 - [x] Nonlinear multibody single-track, NoSlip + basic Tyre contact, Meijaard benchmark validation.
-- [x] Camber thrust and twisting torque in `MagicFormulaTire` (shared with car M3.1; cars still pass camber 0), **toroidal contact** (contact point at centre + (R − ρ)·d − ρ·n), local ground planes per wheel.
+- [x] Camber thrust and twisting torque in `MagicFormulaTire` (shared with cars, which pass their real camber; the garage enables the car camber model), **toroidal contact** (contact point at centre + (R − ρ)·d − ρ·n), local ground planes per wheel.
 - [x] First virtual rider (Lean and Direct modes), low-speed balance moment, brakes, power-limited drive, ABS/TCS/wheelie control (`TwoWheeler`). Still to do from this list: a real foot-down leg contact, rider body lean, the human pedalling model, presets.
 - Performance: a reduced-coordinate formulation or a tailored sparse solve (21×21 dense today) to reach tens of µs per *frame* per player bike, plus a cheaper LOD model for traffic riders.
 - **Rider control ("virtual rider")**: the rider's input is a target lean (or target path curvature). A controller turns it into steer torque, using the linear model at the current speed for gains (counter-steer emerges on its own). The rider can't create forces that aren't there. Balance aids act **only through actuators**: steer torque, rider lean (upper-body mass shift as a joint), and later brake/throttle. The model offers no "hidden hand" holding the bike up.

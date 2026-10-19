@@ -503,7 +503,11 @@ void Vehicle::stepSubstepped(Real hostDt, int substeps, const DriverInput& input
     substeps = std::max(substeps, 1);
     const Real h = hostDt / substeps;
     if (chassisMode_ == ChassisMode::Internal) {
-        for (int k = 0; k < substeps; ++k) step(h, input, ground);
+        DriverInput in = input;
+        for (int k = 0; k < substeps; ++k) {
+            step(h, in, ground);
+            in.shiftUp = in.shiftDown = false;  // edge-triggered inputs apply once
+        }
         return;
     }
     // External: integrate a private copy of the chassis across the substeps,
@@ -963,10 +967,9 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         }
     }
 
-    // With unsprung DOFs the body-vertical forces accelerate only the sprung
-    // mass. The chassis is integrated with the total mass (so the host rigid
-    // body can simply have mass = VehicleDefinition::mass), so scale the
-    // body-Z component of the non-gravitational force by M / M_sprung.
+    // Gravity acts on the total mass at the CoM. The chassis is integrated with the total mass
+    // (so a host rigid body can simply use VehicleDefinition::mass); each unsprung wheel's own
+    // acceleration along the suspension axis is accounted for by its inertial relief force above.
     if (chassisMode_ == ChassisMode::Internal || !hostGravity_) force += gravity * def_.mass;
     forces_ = {force, torque};
 

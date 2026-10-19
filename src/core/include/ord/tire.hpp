@@ -62,7 +62,8 @@ struct TireParams {
     // Evangelou, Limebeer 2004):
     //   Fy = D sin(C atan(B alpha - E(...)) + C_g atan(B_g gamma)),
     //   B_g = camberStiffness * Fz / (C_g * D)  (so dFy/dgamma = camberStiffness * Fz at 0).
-    // 0 = no camber response; the four-wheel model passes gamma = 0 today.
+    // 0 = no camber response. Cars pass their real camber; applySetup() enables the car
+    // camber model (see enableCarCamberModel in setup.cpp).
     Real camberStiffness = 0.0;   // per rad, in units of Fz (bicycle ~0.9, motorcycle ~1.0)
     Real camberShape = 0.6;       // C_g
     // Camber twisting torque: an inclined, rolling contact patch twists the
