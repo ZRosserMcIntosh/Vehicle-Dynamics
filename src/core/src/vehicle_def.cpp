@@ -21,6 +21,10 @@ std::string VehicleDefinition::validate() const {
     if (!inRange(centerOfMass.x, -10, 10) || !inRange(centerOfMass.y, -10, 10) || !inRange(centerOfMass.z, -10, 10))
         return "centerOfMass must be finite and within 10 m of the body origin";
     if (!inRange(steeringAckermann, 0, 1)) return "steeringAckermann must be within 0..1";
+    if (!inRange(topSpeedLimit, 0, 200)) return "topSpeedLimit must be within 0..200 m/s (0 = none)";
+    if (!inRange(body.overhangFront, 0, 5) || !inRange(body.overhangRear, 0, 5) || !inRange(body.halfWidth, 0, 3) ||
+        !inRange(body.height, 0, 5) || !inRange(body.floorZ, -3, 3) || !inRange(body.friction, 0, 3))
+        return "body hull sizes must be within 0..5 m (floorZ -3..3 m) and friction 0..3";
     if (wheels.empty() || wheels.size() > kMaxWheels) return "wheel count must be 1..kMaxWheels";
     if (axles.empty() || axles.size() > kMaxAxles) return "axle count must be 1..kMaxAxles";
     for (std::size_t i = 0; i < wheels.size(); ++i) {
@@ -63,6 +67,16 @@ std::string VehicleDefinition::validate() const {
             return id + "hardpoint must be finite and within 20 m";
         if (!inRange(w.maxSteerAngle, 0, 1.2)) return id + "maxSteerAngle must be within 0..1.2 rad";
         if (!inRange(w.staticToe, -0.2, 0.2)) return id + "staticToe must be within -0.2..0.2 rad";
+        if (!inRange(w.staticCamber, -0.3, 0.2)) return id + "staticCamber must be within -0.3..0.2 rad";
+        if (!inRange(w.camberGain, -5, 5)) return id + "camberGain must be within -5..5 rad/m";
+        if (!inRange(w.casterAngle, -0.2, 0.4)) return id + "casterAngle must be within -0.2..0.4 rad";
+        if (!inRange(sd.bumpDampingFast, 0, 1e6) || !inRange(sd.reboundDampingFast, 0, 1e6))
+            return id + "fast damping must be within 0..1e6 N*s/m";
+        if (!inRange(sd.damperKneeSpeed, 0.001, 10)) return id + "damperKneeSpeed must be within 0.001..10 m/s";
+        if (!inRange(w.tire.thermalCapacity, 0, 1e7) || !inRange(w.tire.temperatureWindow, 1, 500))
+            return id + "tyre thermal parameters out of range";
+        if (!inRange(w.tire.wetGrip, 0, 3) || !inRange(w.tire.looseGrip, 0, 3) || !inRange(w.tire.aquaplaneSensitivity, 0, 20))
+            return id + "tyre compound factors out of range";
         if (!inRange(w.maxBrakeTorque, 0, 1e6) || !inRange(w.handbrakeTorque, 0, 1e6)) return id + "brake torque must be within 0..1e6 N*m";
         if (!inRange(w.unsprungMass, 0, 10000)) return id + "unsprungMass must be within 0..10000 kg";
     }
@@ -73,6 +87,11 @@ std::string VehicleDefinition::validate() const {
             return "axle " + std::to_string(a) + ": invalid wheel indices";
         if (!inRange(ax.antiRollBarRate, 0, 1e8)) return "axle " + std::to_string(a) + ": antiRollBarRate must be within 0..1e8 N/m";
     }
+    if (!inRange(aero.rideHeightRef, 0, 2) || !inRange(aero.floorStallHeight, 0, 1) || !inRange(aero.rideHeightExponent, 0, 3))
+        return "aero: ride-height parameters out of range";
+    if (!inRange(aero.rearWing.span, 0, 4) || !inRange(aero.rearWing.chord, 0, 2) || !inRange(aero.rearWing.angle, -0.5, 0.8))
+        return "aero: rear wing out of range";
+    if (!inRange(aero.sideForceArea, 0, 20) || !inRange(aero.ambientTemperature, -60, 70)) return "aero: out of range";
     const DrivetrainDef& dt = drivetrain;
     const EngineDef& e = dt.engine;
     if (e.torqueCurve.size() < 2) return "engine torque curve needs >= 2 points";

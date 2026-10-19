@@ -15,7 +15,9 @@ Without Emscripten, `WASI_SDK=/path/to/wasi-sdk web/build_wasi.sh` builds the sa
 becomes `ord.mjs` and exposes the identical `_ord_*` / `HEAPF64` interface.
 
 Cars (`ord_create` index): 0 Sports RWD, 1 Hatch FWD, 2 Saloon AWD, 3 Hypercar AWD, 4 Race car,
-5 Rosser Stella V8 (flat-plane V8, 9,000 rpm; the São Paulo World game's own car).
+5 Rosser Stella V8 (flat-plane V8, 9,000 rpm; the São Paulo World game's own car), and approximations of real
+cars from published figures (`src/vehicles/production_vehicles.hpp`): 6 Porsche 911 Carrera S, 7 911 Carrera 4S,
+8 Mercedes-AMG S 63 4MATIC+, 9 Mercedes-Benz S 600 Guard, 10 Formula 1 car (2026 regulations).
 
 The proving ground (bump lane heights, wet and rough patches) is defined in `ord_web.cpp`
 (including the default-start proving ground west of the drag strip: graded bump course, split-mu lane,
@@ -24,7 +26,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 
 ## State buffer
 
-`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 36-value header, then 17 values per wheel (`ord_state_per_wheel()`).
+`ord_state()` returns a `double*` that `ord_advance()` refreshes: a 39-value header, then 17 values per wheel (`ord_state_per_wheel()`).
 
 | Header | Meaning | Wheel | Meaning |
 |---|---|---|---|
@@ -40,10 +42,28 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 | 27–30 | steer/throttle/brake input, ground queries | 14–15 | ESC brake torque, surface id |
 | 31 | largest impact speed this frame (m/s, city world) | | |
 | 32–35 | drift assist active, target sideslip (rad), throttle cut, steering change (rad) | 16 | grip used (0 = none, ~1 = at the limit) |
+| 36–38 | upright (body z · world z: 1 upright, −1 on the roof), body hull points touching the ground, their total normal force (N) | | |
 
 `ord_set_tuning(steerLock, diffType, preload, powerRamp, coastRamp)` sets the steering lock (rad,
 0 = stock) and the rear differential (−1 stock, 0 open, 1 locked, 2 clutch LSD) now and whenever
 the car is re-created.
+
+## Garage
+
+Setups go in and out as JSON (fields and units in
+[`ord/setup.hpp`](../src/core/include/ord/setup.hpp)). Write UTF-8 into
+`ord_text_buffer(n)` and call `ord_apply_setup()`. Only the fields present change. It returns
+1, or 0 with the reason in `ord_text()` / `ord_text_length()`. The car is rebuilt where it is,
+at the speed it had. `ord_setup_json(stock)` puts the current setup (or the stock one) into
+`ord_text()`. `ord_clear_setup()` restores the stock car. `ord_set_tyre_warmers(celsius)`
+(< 0 = ambient) sets the tread temperature now and on every re-creation.
+`ord_set_wind(wx, wy)` sets a steady wind in m/s, as the direction the air moves.
+
+`ord_garage_state()` returns `ord_garage_state_size()` doubles:
+- 0–11: airspeed, airflow yaw, front and rear downforce, drag, wing downforce, floor clearance
+  front and rear, wing stalled, floor stalled, ambient °C, air density.
+- Then 4 per wheel: camber (rad, negative = top in), tread °C, optimal °C, grip factor from
+  temperature.
 
 ## Two-wheelers
 

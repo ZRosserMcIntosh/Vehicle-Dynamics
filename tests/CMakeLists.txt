@@ -14,6 +14,9 @@ set(ORD_TEST_SOURCES
   test_single_track.cpp
   test_two_wheeler.cpp
   test_crash.cpp
+  test_garage.cpp
+  test_production.cpp
+  test_rollover.cpp
 )
 add_executable(ord_tests ${ORD_TEST_SOURCES})
 target_link_libraries(ord_tests PRIVATE ord_scenarios)

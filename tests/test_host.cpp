@@ -137,3 +137,21 @@ TEST_CASE("host: 60 Hz host with 4 vehicle substeps matches a 240 Hz internal ru
     CHECK_NEAR(sub.speed / ref.speed, 1.0, 0.01);
     CHECK(std::hypot(ref.x - sub.x, ref.y - sub.y) < 0.01 * std::hypot(ref.x, ref.y));
 }
+
+TEST_CASE("host: one shift press shifts one gear, however many substeps the frame runs") {
+    for (ChassisMode mode : {ChassisMode::Internal, ChassisMode::External}) {
+        Vehicle v(vehicles::referenceSportsRwd(), makePreset(DrivingPreset::Simulation));  // manual gearbox
+        FlatGround g;
+        v.reset({0, 0, 0.6}, 0, g);
+        v.setChassisMode(mode, false);
+        DriverInput in;
+        in.shiftUp = true;
+        v.stepSubstepped(1.0 / 60, 4, in, g);
+        if (mode == ChassisMode::External) v.setChassisState(v.state());
+        const int after = v.telemetry().gear;
+        in.shiftUp = false;
+        v.stepSubstepped(1.0 / 60, 4, in, g);
+        CHECK(after == 2);
+        CHECK(v.telemetry().gear == 2);
+    }
+}

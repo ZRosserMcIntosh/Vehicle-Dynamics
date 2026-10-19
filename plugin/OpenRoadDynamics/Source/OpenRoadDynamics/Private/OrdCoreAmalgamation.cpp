@@ -16,6 +16,7 @@
 // with GCC and Clang (-std=c++20 -fno-exceptions -fno-rtti -Wall -Wextra
 // -Wshadow-all -Werror); it has not been compiled by UnrealBuildTool.
 
+#include "src/aero.cpp"
 #include "src/assists.cpp"
 #include "src/crash.cpp"
 #include "src/debug_draw.cpp"
@@ -23,6 +24,7 @@
 #include "src/ground.cpp"
 #include "src/ground_cache.cpp"
 #include "src/lod_manager.cpp"
+#include "src/setup.cpp"
 #include "src/single_track.cpp"
 #include "src/telemetry.cpp"
 #include "src/tire.cpp"

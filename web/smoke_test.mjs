@@ -117,5 +117,54 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
           `dV ${(r[2] * 3.6).toFixed(0)} km/h, chest ${r[6].toFixed(0)} g, HIC ${r[7].toFixed(0)}, AIS4+ ${(100 * r[13]).toFixed(1)}%, verdict ${r[15]}`);
   }
 }
+// Rollover: the proving ground's one-sided ramp lifts the left wheels 0.9 m and drops them. Fast
+// enough, a car goes over (the tall, heavy S 600 Guard first); the low, wide F1 car never does.
+{
+  const y = M._ord_roll_ramp_lane_y();
+  const run = (car, kmh) => {
+    M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+    M._ord_create(car, -415, y, 0);
+    let minUp = 1, faulted = false;
+    for (let i = 0; i < 60 * 25; ++i) {
+      const s = state(), v = s[7], past = s[0] > -265, want = kmh / 3.6;
+      M._ord_set_input(0, past ? 0 : v < want - 1 ? 1 : v < want ? 0.3 : 0, past || v > want + 1 ? 0.3 : 0, 0, 0, 0); M._ord_advance(1 / 60);
+      const s2 = state(); minUp = Math.min(minUp, s2[36]); faulted = faulted || s2[23] !== 0;
+    }
+    return { minUp, faulted };
+  };
+  const slow = run(0, 50), fast = run(0, 110), guard = run(9, 75), f1 = run(10, 120);
+  check('rollover ramp', !slow.faulted && !fast.faulted && !guard.faulted && !f1.faulted && slow.minUp > 0.7 && fast.minUp < 0 && guard.minUp < 0 && f1.minUp > 0.7,
+        `upright min: sports 50 km/h ${slow.minUp.toFixed(2)}, 110 km/h ${fast.minUp.toFixed(2)}; Guard 75 km/h ${guard.minUp.toFixed(2)}; F1 120 km/h ${f1.minUp.toFixed(2)}`);
+}
+// Garage: read the stock setup as JSON, fit slicks and a rear wing, warm the tyres; the readouts
+// show the wing's downforce and hot tyres. A malformed setup is refused with a reason.
+{
+  const text = () => new TextDecoder().decode(M.HEAPU8.slice(M._ord_text(), M._ord_text() + M._ord_text_length()));
+  const send = (json) => { const b = new TextEncoder().encode(json); M.HEAPU8.set(b, M._ord_text_buffer(b.length)); return M._ord_apply_setup(); };
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  M._ord_create(0, 0, 0, 0);
+  M._ord_setup_json(1);
+  const stock = JSON.parse(text());
+  check('garage stock setup JSON', stock.front && stock.rear && stock.gears.length > 0, `${stock.gears.length} gears, balance ${stock.brakeBalance.toFixed(2)}`);
+  check('garage rejects bad JSON', send('{"front": ') === 0 && text().length > 0, `"${text()}"`);
+  M._ord_set_tyre_warmers(90);
+  const ok = send(JSON.stringify({ front: { compound: 'slick', camberDeg: -3 }, rear: { compound: 'slick' }, rearWing: true, wingAngleDeg: 14 }));
+  const gs = () => new Float64Array(M.HEAPF64.buffer, M._ord_garage_state(), M._ord_garage_state_size());
+  for (let i = 0; i < 60 * 12; ++i) { M._ord_set_input(0, state()[7] < 50 ? 1 : 0.3, 0, 0, 0, 0); M._ord_advance(1 / 60); }
+  const g0 = gs();
+  check('garage setup applies (slicks, wing, -3 deg)', ok === 1 && g0[5] > 200 && g0[12] * 57.3 < -2 && g0[13] > 60,
+        `${(state()[7] * 3.6).toFixed(0)} km/h, wing ${g0[5].toFixed(0)} N, FL camber ${(g0[12] * 57.3).toFixed(1)} deg, FL ${g0[13].toFixed(0)} C (window ${g0[14].toFixed(0)} C)`);
+  M._ord_setup_json(0);
+  check('garage setup reads back', JSON.parse(text()).rear.compound === 'slick', '');
+  M._ord_clear_setup(); M._ord_set_tyre_warmers(-1);
+}
+// Real-car approximations (6-10): each creates and pulls away cleanly.
+for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG S 63'], [9, 'S 600 Guard'], [10, 'F1 2026']]) {
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  const ok = M._ord_create(idx, 0, 0, 0) === 1;
+  for (let i = 0; i < 60 * 3; ++i) { M._ord_set_input(0, 1, 0, 0, 0, 0); M._ord_advance(1 / 60); }
+  const st = state();
+  check(`${name} drives`, ok && st[23] === 0 && st[7] * 3.6 > 50, `${(st[7] * 3.6).toFixed(0)} km/h after 3 s`);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

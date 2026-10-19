@@ -43,6 +43,7 @@ struct Sim {
         for (const auto& p : patches) ground.addPatch(p);
         start.z += ground.heightAt(start.x, start.y);
         vehicle.reset(start, yaw, ground);
+        if (std::isfinite(cfg.tyreTemperature)) vehicle.setTyreTemperatures(cfg.tyreTemperature);
         if (cfg.hostHz > 0) {
             host = true;
             substeps = std::max(1, static_cast<int>(std::lround(cfg.hz / cfg.hostHz)));
@@ -449,7 +450,7 @@ DropResult dropTest(const RunConfig& cfgIn, Real dropHeight) {
 
 CoastResult coastNoLosses(const RunConfig& cfgIn, Real startKmh) {
     RunConfig cfg = withAutoShift(cfgIn);
-    cfg.vehicle.aero = {0, 0, 0, cfg.vehicle.aero.airDensity};
+    { const Real rho = cfg.vehicle.aero.airDensity; cfg.vehicle.aero = AeroDef{}; cfg.vehicle.aero.dragArea = 0; cfg.vehicle.aero.airDensity = rho; }
     for (auto& w : cfg.vehicle.wheels) w.tire.rollingResistance = 0;
     Sim sim(cfg);
     const Real v0 = kmhToMs(startKmh);
@@ -639,7 +640,7 @@ FrequencyResult suspensionFrequencies(const RunConfig& cfgIn) {
     cfg.hz = 5000;
     VehicleDefinition& d = cfg.vehicle;
     d.centerOfMass = {0, 0, 0};
-    d.aero = {0, 0, 0, d.aero.airDensity};
+    { const Real rho = d.aero.airDensity; d.aero = AeroDef{}; d.aero.dragArea = 0; d.aero.airDensity = rho; }
     const WheelDef proto = d.wheels[0];
     for (std::size_t w = 0; w < d.wheels.size(); ++w) {
         WheelDef nw = proto;

@@ -131,6 +131,11 @@ public:
     // Appends one request per wheel; `out` is reused by the caller.
     void groundPrefetchRequests(std::vector<GroundStripRequest>& out) const;
 
+    // Steady wind, world frame (m/s, the direction the air moves).
+    void setWind(const Vec3& w) { wind_ = w; }
+    // Tread temperature of every tyre (deg C), e.g. tyre warmers at the start.
+    void setTyreTemperatures(Real celsius);
+
     // ---- Run-time tuning (garage settings; take effect on the next step) ----
     // Steering lock: scales every steered wheel's maxSteerAngle so the largest
     // becomes `maxAngle` (rad, 0.05..1.2). Drift cars run 0.8-1.0 rad.
@@ -197,6 +202,8 @@ private:
         Real contactVx = 0, contactVy = 0;
         Real steer = 0;
         TireForces forces;
+        Real camber = 0;            // rad, inclination to the ground normal (top toward +y positive)
+        Real temperature = 25;      // deg C, tread (thermal model)
     };
 
     struct Sample {
@@ -237,6 +244,15 @@ private:
     Mat3 invInertiaBody_;
     Vec3 inertiaBody_;
     Real maxSteerRef_ = 0;
+    std::array<Real, kMaxWheels> rideCompression_{};  // compression at static ride height
+    Vec3 wind_{};
+    AeroTelemetry aeroTel_;
+    // Body collision hull (see BodyDef): points in the body frame, built once.
+    static constexpr int kHullPoints = 17 + kMaxWheels;  // body box + one tyre shoulder per wheel
+    std::array<Vec3, kHullPoints> hull_{};
+    int hullCount_ = 0;
+    int bodyContacts_ = 0;
+    Real bodyContactForce_ = 0;
     Real time_ = 0;
     Real lastDt_ = 1.0 / 240.0;
     ChassisMode chassisMode_ = ChassisMode::Internal;

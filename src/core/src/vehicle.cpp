@@ -39,6 +39,20 @@ int sampleLayout(int n, std::array<Offset, kMaxContactSamples>& out) {
     }
 }
 
+// Two-stage damper: force at velocity v (+ = compression), and its slope.
+Real damperForce(const SuspensionDef& sd, Real v, Real& slope) {
+    const Real cs = v > 0 ? sd.bumpDamping : sd.reboundDamping;
+    const Real cfRaw = v > 0 ? sd.bumpDampingFast : sd.reboundDampingFast;
+    const Real cf = cfRaw > 0 ? cfRaw : cs;
+    const Real vk = std::max(sd.damperKneeSpeed, 1e-3);
+    if (std::abs(v) <= vk) {
+        slope = cs;
+        return cs * v;
+    }
+    slope = cf;
+    return std::copysign(cs * vk + cf * (std::abs(v) - vk), v);
+}
+
 int sanitizeSamples(int n) { return (n == 5 || n == 8 || n == 9) ? n : 1; }
 
 }  // namespace
@@ -70,7 +84,67 @@ Vehicle::Vehicle(const VehicleDefinition& def, const AssistConfig& assists, cons
     inertiaBody_ = def_.inertia;
     invInertiaBody_ = Mat3::diagonal({1.0 / def_.inertia.x, 1.0 / def_.inertia.y, 1.0 / def_.inertia.z});
     telem_.wheelCount = def_.wheels.size();
+    {
+        // Compression at static ride height (camber gain reference).
+        std::array<Real, kMaxWheels> load{};
+        staticWheelLoads(load);
+        for (std::size_t w = 0; w < def_.wheels.size(); ++w) {
+            const SuspensionDef& sd = def_.wheels[w].suspension;
+            const Real sprung = load[w] - def_.wheels[w].unsprungMass * kGravity;
+            rideCompression_[w] = clamp((sprung - sd.springPreload) / std::max(sd.springRate, 1.0), 0.0, sd.travel);
+        }
+        setTyreTemperatures(def_.aero.ambientTemperature);
+    }
+    {
+        // Body collision hull: a box from the axles' overhangs, the track and a floor-to-roof
+        // height, with a narrower, shorter roof (the greenhouse) and points at the sills and the
+        // belt line. 17 points: enough to land on a corner, a side, the roof or the floor.
+        const BodyDef& b = def_.body;
+        Real xf = -1e9, xr = 1e9, yMax = 0, groundZ = 1e9;
+        for (std::size_t w = 0; w < def_.wheels.size(); ++w) {
+            const WheelDef& wd = def_.wheels[w];
+            xf = std::max(xf, wd.suspension.hardpoint.x);
+            xr = std::min(xr, wd.suspension.hardpoint.x);
+            yMax = std::max(yMax, std::abs(wd.suspension.hardpoint.y));
+            // ground under this wheel at static ride height
+            groundZ = std::min(groundZ, wd.suspension.hardpoint.z - (wd.suspension.travel - rideCompression_[w]) - wd.tire.radius);
+        }
+        const Real front = xf + (b.overhangFront > 0 ? b.overhangFront : 0.9);
+        const Real rear = xr - (b.overhangRear > 0 ? b.overhangRear : 0.9);
+        const Real hw = b.halfWidth > 0 ? b.halfWidth : yMax + 0.12;
+        const Real floor = b.floorZ != 0 ? b.floorZ : groundZ + 0.13;  // 13 cm ground clearance
+        const Real roof = floor + (b.height > 0 ? b.height : 1.15);
+        const Real belt = floor + 0.55 * (roof - floor);
+        const Real rr = rear + 0.30 * (front - rear), rf = rear + 0.65 * (front - rear);  // roof from 30% to 65% of the length
+        int k = 0;
+        for (Real x : {front, rear})
+            for (Real y : {hw, -hw}) {
+                hull_[static_cast<std::size_t>(k++)] = {x, y, floor};
+                hull_[static_cast<std::size_t>(k++)] = {x, y, belt};
+            }
+        for (Real y : {hw, -hw}) {
+            hull_[static_cast<std::size_t>(k++)] = {0.5 * (front + rear), y, floor};
+            hull_[static_cast<std::size_t>(k++)] = {0.5 * (front + rear), y, belt};
+        }
+        for (Real x : {rr, rf})
+            for (Real y : {0.8 * hw, -0.8 * hw}) hull_[static_cast<std::size_t>(k++)] = {x, y, roof};
+        hull_[static_cast<std::size_t>(k++)] = {0.5 * (rr + rf), 0, roof};
+        // The tyres' outer shoulders: what a car tipping over pivots on (the tyre's own support
+        // fades out as it tilts past ~53 degrees, see computeStep).
+        for (std::size_t w = 0; w < def_.wheels.size() && k < kHullPoints; ++w) {
+            const WheelDef& wd = def_.wheels[w];
+            const Vec3 hp = wd.suspension.hardpoint;
+            const Real wcz = hp.z - (wd.suspension.travel - rideCompression_[w]);
+            const Real side = hp.y >= 0 ? 1.0 : -1.0;
+            hull_[static_cast<std::size_t>(k++)] = {hp.x, hp.y + side * 0.12, wcz - 0.7 * wd.tire.radius};
+        }
+        hullCount_ = k;
+    }
     setFidelity(fidelity_);
+}
+
+void Vehicle::setTyreTemperatures(Real celsius) {
+    for (auto& ws : wheels_) ws.temperature = celsius;
 }
 
 void Vehicle::setFidelity(const VehicleFidelity& f) {
@@ -265,6 +339,7 @@ void Vehicle::placeOnGround(Real x, Real y, Real yaw, const GroundQuery& ground,
     for (std::size_t w = 0; w < nw; ++w) {
         WheelState& ws = wheels_[w];
         ws = WheelState{};
+        ws.temperature = def_.aero.ambientTemperature;
         ws.compression = ws.prevCompression = xs[w];
         ws.prevPen.fill(pens[w]);
     }
@@ -428,7 +503,11 @@ void Vehicle::stepSubstepped(Real hostDt, int substeps, const DriverInput& input
     substeps = std::max(substeps, 1);
     const Real h = hostDt / substeps;
     if (chassisMode_ == ChassisMode::Internal) {
-        for (int k = 0; k < substeps; ++k) step(h, input, ground);
+        DriverInput in = input;
+        for (int k = 0; k < substeps; ++k) {
+            step(h, in, ground);
+            in.shiftUp = in.shiftDown = false;  // edge-triggered inputs apply once
+        }
         return;
     }
     // External: integrate a private copy of the chassis across the substeps,
@@ -489,6 +568,14 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         int patchCount = 1;
         const int n = sampleContact(w, hp, up, headingWorld, ground, samples, patchCount);
         const Real weight = 1.0 / patchCount;
+        // A car tilted far over (past ~53 degrees) rests on the tyre's sidewall,
+        // not on a point found straight "down" its own axis, which by then lies well off to the
+        // side and would prop the car back up. The tyre's support fades out by ~70 degrees and
+        // the body hull's sills take over (rollover). 1 in any normal driving.
+        // (measured against the vertical, not the local ground normal: kerb edges have steep
+        // local normals under an upright car)
+        const Real tc = clamp((up.z - 0.34) / 0.26, 0.0, 1.0);
+        const Real tilt = tc * tc * (3 - 2 * tc);
 
         // ARB partner (explicit coupling to the other wheel's previous compression).
         const AxleDef& ax = def_.axles[static_cast<std::size_t>(axleOf_[w])];
@@ -534,14 +621,15 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
                     radial[k] = samples[k].normal;
                 }
                 if (pen0[k] <= 0) continue;
-                ru[k] = std::max(0.0, dot(radial[k], up));
+                ru[k] = std::max(0.0, dot(radial[k], up)) * tilt;
                 P0 += weight * pen0[k] * ru[k];
                 Pprev += weight * ws.prevPen[k] * ru[k];
                 Wact += weight * ru[k] * slope;
             }
             // Suspension spring/damper/ARB/bump stops, linearised at x0.
-            const Real c = xd0 > 0 ? sd.bumpDamping : sd.reboundDamping;
-            Real As = sd.springPreload + sd.springRate * x0 + karb * (x0 - xo);
+            Real c = 0;
+            const Real fd0 = damperForce(sd, xd0, c);  // linearised two-stage damper: fd ~ fd0 + c (xd - xd0)
+            Real As = sd.springPreload + sd.springRate * x0 + karb * (x0 - xo) + (fd0 - c * xd0);
             Real Ks = sd.springRate + karb;
             if (x0 > sd.travel) { As += sd.bumpStopRate * (x0 - sd.travel); Ks += sd.bumpStopRate; }
             if (x0 < 0) { As += sd.bumpStopRate * x0; Ks += sd.bumpStopRate; }
@@ -575,7 +663,7 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
                     pen = (sd.travel - x1) + r - samples[k].d;
                 }
                 Real fk = 0;
-                if (pen > 0 && Bt > 0) fk = std::max(0.0, weight * (kt * pen + ct * (pen - ws.prevPen[k]) / dt));
+                if (pen > 0 && Bt > 0) fk = tilt * std::max(0.0, weight * (kt * pen + ct * (pen - ws.prevPen[k]) / dt));
                 ws.prevPen[k] = pen > 0 ? pen : 0.0;
                 dbg.point[k] = samples[k].hit ? samples[k].point : wc1 - up * r;
                 dbg.penetration[k] = pen;
@@ -605,10 +693,11 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             if (x > sd.travel) f += sd.bumpStopRate * (x - sd.travel);
             const Real xdot = (x - ws.prevCompression) / dt;
             ws.compressionRate = xdot;
-            f += (xdot > 0 ? sd.bumpDamping : sd.reboundDamping) * xdot;
+            Real slope = 0;
+            f += damperForce(sd, xdot, slope);
             f += karb * (x - xo);
             ws.springForce = f;
-            ws.load = ws.contact ? std::max(0.0, f) : 0.0;
+            ws.load = ws.contact ? std::max(0.0, f) * tilt : 0.0;
             for (int k = 0; k < n; ++k) {
                 dbg.point[k] = samples[k].point;
                 dbg.penetration[k] = samples[k].hit ? sd.travel + r - samples[k].d - x : -1.0;
@@ -635,6 +724,16 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         const Vec3 vContact = body_.velocity + cross(body_.angularVelocity, ws.patchPoint - comWorld);
         ws.contactVx = dot(vContact, ws.longDir);
         ws.contactVy = dot(vContact, ws.latDir);
+        {
+            // Wheel inclination to the road: static camber + gain with
+            // compression + caster with steer, through the body's roll.
+            const Real side = wd.isLeft ? 1.0 : -1.0;
+            Real g = side * (wd.staticCamber + wd.camberGain * (ws.compression - rideCompression_[w]));
+            if (wd.maxSteerAngle > 0) g += std::sin(wd.casterAngle) * std::sin(ws.steer);
+            const Real cs = std::cos(ws.steer), sn = std::sin(ws.steer);
+            const Vec3 axle = q.rotate({-sn * std::cos(g), cs * std::cos(g), -std::sin(g)});
+            ws.camber = -std::asin(clamp(dot(axle, nn), -1.0, 1.0));
+        }
         dbg.hardpoint = hp;
         dbg.patchCenter = ws.patchPoint;
         dbg.normal = nn;
@@ -661,7 +760,8 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         if (ws.load > 0) {
             tire.integrateLateralSlip(ws.slip, ws.contactVx, ws.contactVy, dt);
             const Real speed = std::hypot(ws.contactVx, ws.contactVy);
-            const TireForces f0 = tire.evaluate(ws.load, ws.slip.kappa, ws.slip.tanAlpha, ws.hit.surface, speed);
+            const TireForces f0 = tire.evaluate(ws.load, ws.slip.kappa, ws.slip.tanAlpha, ws.hit.surface, speed, ws.camber,
+                                                wd.tire.thermalCapacity > 0 ? tire.temperatureGrip(ws.temperature) : 1.0);
             si.contactVx = ws.contactVx;
             si.fx0 = f0.fx;
             si.dFxdKappa = std::max(0.0, f0.dFxdKappa);
@@ -678,6 +778,11 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
     // ---- 3. Implicit drivetrain + wheel spin + longitudinal slip ----
     DrivetrainCommand dc;
     dc.throttle = cmd.throttle;
+    if (def_.topSpeedLimit > 0) {
+        // electronic top-speed limiter (e.g. 250 km/h): throttle fades over the last 2 %
+        const Real over = (std::abs(forwardSpeed()) - 0.98 * def_.topSpeedLimit) / (0.02 * def_.topSpeedLimit);
+        dc.throttle *= 1.0 - clamp(over, 0.0, 1.0);
+    }
     dc.clutchEngagement = cmd.clutchEngagement;
     dc.gear = cmd.gear;
     drivetrain_.step(dt, dc, solveIn.data(), solveOut.data());
@@ -706,9 +811,21 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             continue;
         }
         const Real speed = std::hypot(ws.contactVx, ws.contactVy);
-        ws.forces = tires_[w].evaluate(ws.load, ws.slip.kappa, ws.slip.tanAlpha, ws.hit.surface, speed);
+        const bool thermal = wd.tire.thermalCapacity > 0;
+        ws.forces = tires_[w].evaluate(ws.load, ws.slip.kappa, ws.slip.tanAlpha, ws.hit.surface, speed, ws.camber,
+                                       thermal ? tires_[w].temperatureGrip(ws.temperature) : 1.0);
         ws.forces.fx = solveOut[w].fx;  // consistent with the implicit wheel solve
         ws.forces.fy -= solveIn[w].slipDamping * ws.contactVy;
+        if (thermal) {
+            // One-node tread temperature: sliding power (and a little rolling
+            // hysteresis) heats it, air cools it, faster with speed.
+            const Real vSlipX = ws.omega * wd.tire.radius - ws.contactVx;
+            const Real slidePower = std::abs(ws.forces.fx * vSlipX) + std::abs(ws.forces.fy * ws.contactVy);
+            const Real rolling = wd.tire.rollingResistance * ws.load * std::abs(ws.contactVx) * 0.5;
+            const Real cool = (wd.tire.coolingBase + wd.tire.coolingPerSpeed * speed) * (ws.temperature - def_.aero.ambientTemperature);
+            ws.temperature += dt * (wd.tire.heatFraction * slidePower + rolling - cool) / wd.tire.thermalCapacity;
+            ws.temperature = clamp(ws.temperature, -30.0, 250.0);
+        }
         const Vec3 n = ws.normal;
         Vec3 fc = ws.longDir * ws.forces.fx + ws.latDir * ws.forces.fy;
         if (!unsprung) fc += n * ws.load;
@@ -719,27 +836,140 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         debug_[w].fy = ws.forces.fy;
     }
 
-    // Aerodynamics (still air): drag at the CoM, downforce at each axle.
-    const Real vmag = length(body_.velocity);
-    const AeroDef& aero = def_.aero;
-    force += body_.velocity * (-0.5 * aero.airDensity * aero.dragArea * vmag);
-    const Real vxBody = bodyVelocity().x;
-    const Real qDyn = 0.5 * aero.airDensity * vxBody * vxBody;
-    if (def_.axles.size() >= 2 && (aero.frontDownforceArea != 0 || aero.rearDownforceArea != 0)) {
-        const auto axlePoint = [&](const AxleDef& ax) {
-            const Vec3 hp = (def_.wheels[ax.leftWheel].suspension.hardpoint + def_.wheels[ax.rightWheel].suspension.hardpoint) * 0.5;
-            return body_.position + q.rotate(hp);
-        };
-        const Vec3 ff = -up * (qDyn * aero.frontDownforceArea);
-        const Vec3 fr = -up * (qDyn * aero.rearDownforceArea);
-        force += ff + fr;
-        torque += cross(axlePoint(def_.axles.front()) - comWorld, ff) + cross(axlePoint(def_.axles.back()) - comWorld, fr);
+    // Aerodynamics: relative to the air (wind), drag at the CoM, body/floor
+    // downforce at each axle (ride-height sensitive when modelled), side force
+    // in yaw, rear wing at its own position.
+    {
+        const AeroDef& aero = def_.aero;
+        AeroTelemetry& at = aeroTel_;
+        at = {};
+        const Vec3 vAir = body_.velocity - wind_;
+        const Real vmag = length(vAir);
+        at.airspeed = vmag;
+        force += vAir * (-0.5 * aero.airDensity * aero.dragArea * vmag);
+        at.drag = 0.5 * aero.airDensity * aero.dragArea * vmag * vmag;
+        const Vec3 vb = q.inverseRotate(vAir);
+        const Real yaw = (vb.x > 0.5) ? std::atan2(vb.y, vb.x) : 0.0;
+        at.yaw = yaw;
+        const Real qDyn = 0.5 * aero.airDensity * std::max(0.0, vb.x) * std::max(0.0, vb.x);
+        const Real yawFactor = std::cos(yaw) * std::cos(yaw);
+        if (aero.sideForceArea > 0 && vmag > 0.5) {
+            const Vec3 fs = q.rotate({0, -0.5 * aero.airDensity * vmag * vmag * aero.sideForceArea * std::sin(yaw), 0});
+            force += fs;
+        }
+        if (def_.axles.size() >= 2) {
+            auto axlePoint = [&](const AxleDef& ax) {
+                const Vec3 hp = (def_.wheels[ax.leftWheel].suspension.hardpoint + def_.wheels[ax.rightWheel].suspension.hardpoint) * 0.5;
+                return body_.position + q.rotate(hp);
+            };
+            // Floor clearance at an axle from its suspension state (flat ground).
+            auto clearance = [&](const AxleDef& ax) {
+                Real c = 0;
+                for (int wi : {ax.leftWheel, ax.rightWheel}) {
+                    const WheelDef& wd = def_.wheels[static_cast<std::size_t>(wi)];
+                    const WheelState& ws = wheels_[static_cast<std::size_t>(wi)];
+                    c += aero.floorZ - wd.suspension.hardpoint.z + wd.suspension.travel - ws.compression + wd.tire.radius;
+                }
+                return 0.5 * c;
+            };
+            auto heightFactor = [&](Real h, bool& stalled) {
+                if (aero.rideHeightRef <= 0) return 1.0;
+                const Real hh = std::max(h, 0.005);
+                Real f = std::pow(aero.rideHeightRef / hh, aero.rideHeightExponent);
+                if (aero.floorStallHeight > 0 && hh < aero.floorStallHeight) {
+                    // choke: the diffuser flow separates within ~15 mm below the
+                    // stall height, taking the floor to 40% of its downforce
+                    const Real t = clamp((aero.floorStallHeight - hh) / 0.015, 0.0, 1.0);
+                    f *= 1 - 0.6 * t * t * (3 - 2 * t);
+                    stalled = true;
+                }
+                return std::min(f, 2.5);
+            };
+            const AxleDef& fa = def_.axles.front();
+            const AxleDef& ra = def_.axles.back();
+            at.clearanceFront = clearance(fa);
+            at.clearanceRear = clearance(ra);
+            bool stF = false, stR = false;
+            const Real dfF = qDyn * aero.frontDownforceArea * yawFactor * heightFactor(at.clearanceFront, stF);
+            const Real dfR = qDyn * aero.rearDownforceArea * yawFactor * heightFactor(at.clearanceRear, stR);
+            at.floorStalled = stF || stR;
+            if (dfF != 0 || dfR != 0) {
+                const Vec3 ff = -up * dfF, fr = -up * dfR;
+                force += ff + fr;
+                torque += cross(axlePoint(fa) - comWorld, ff) + cross(axlePoint(ra) - comWorld, fr);
+            }
+            at.downforceFront = dfF;
+            at.downforceRear = dfR;
+        }
+        const auto& wing = aero.rearWing;
+        if (wing.span > 0 && wing.chord > 0 && qDyn > 0) {
+            // Angle of attack toward downforce: the set angle, less the flow
+            // coming from below the chord line in body axes (that includes the
+            // car's nose-up pitch: nose down = more wing).
+            const Real flowDown = std::atan2(-vb.z, std::max(vb.x, 0.1));
+            const Real ar = wing.span / wing.chord;
+            const WingSectionResult sec = evaluateWingSection(wing.polar, wing.angle - flowDown, liftCurveSlope3D(ar, wing.polar.liftSlope));
+            const Real S = wing.span * wing.chord;
+            const Real cdi = sec.cl * sec.cl / (kPi * wing.efficiency * ar);
+            const Real down = qDyn * S * sec.cl * yawFactor;
+            const Real dragW = qDyn * S * (sec.cd + cdi);
+            const Vec3 pw = body_.position + q.rotate(wing.position);
+            const Vec3 fw = -up * down + (vmag > 0.1 ? vAir * (-dragW / vmag) : Vec3{});
+            force += fw;
+            torque += cross(pw - comWorld, fw);
+            at.wingDownforce = down;
+            at.downforceRear += down;
+            at.drag += dragW;
+            at.wingStalled = sec.stalled;
+        }
     }
 
-    // With unsprung DOFs the body-vertical forces accelerate only the sprung
-    // mass. The chassis is integrated with the total mass (so the host rigid
-    // body can simply have mass = VehicleDefinition::mass), so scale the
-    // body-Z component of the non-gravitational force by M / M_sprung.
+    // ---- Body against the ground (rollover, a car on its side or roof, a landing) ----
+    // Only when the car is tilted past ~30 degrees or has no wheel on the ground, so normal
+    // driving costs nothing and queries nothing. Each hull point below the ground gets a stiff,
+    // damped normal force and sliding friction (metal and glass on the road).
+    bodyContacts_ = 0;
+    bodyContactForce_ = 0;
+    {
+        bool anyWheel = false;
+        for (std::size_t w = 0; w < nw; ++w) anyWheel = anyWheel || wheels_[w].contact;
+        if (up.z < 0.86 || !anyWheel) {
+            const Real kPt = def_.mass * 600.0;                            // N/m per point
+            const Real cPt = 2.0 * 0.6 * std::sqrt(kPt * def_.mass / 6.0);  // ~0.6 of critical, ~6 points in contact
+            const Mat3 R = q.toMatrix();
+            const Mat3 invI = R * invInertiaBody_ * R.transposed();
+            for (int hk = 0; hk < hullCount_; ++hk) {
+                const Vec3& local = hull_[static_cast<std::size_t>(hk)];
+                const Vec3 p = body_.position + q.rotate(local);
+                const GroundHit h = ground.raycast({p.x, p.y, p.z + 1.5}, {0, 0, -1}, 3.0);
+                if (!h.hit) continue;
+                const Real pen = dot(h.point - p, h.normal);
+                if (pen <= 0) continue;
+                const Vec3 r = p - comWorld;
+                const Vec3 v = body_.velocity + cross(body_.angularVelocity, r);
+                const Real vn = dot(v, h.normal);
+                // Explicit contact: keep it stable for the effective mass this point sees (mass and
+                // inertia about the CoM), whatever the definition. Never binds for a normal car.
+                const Vec3 rn = cross(r, h.normal);
+                const Real mEff = 1.0 / (1.0 / def_.mass + dot(rn, invI * rn));
+                const Real k = std::min(kPt, mEff * (0.5 / dt) * (0.5 / dt));
+                const Real c = std::min(cPt, mEff * 0.8 / dt);
+                const Real fn = std::max(0.0, k * std::min(pen, 0.25) - c * vn);
+                if (fn <= 0) continue;
+                const Vec3 vt = v - h.normal * vn;
+                const Real mu = def_.body.friction * h.surface.frictionScale;
+                const Vec3 f = h.normal * fn - vt * (mu * fn / (length(vt) + 0.3));
+                force += f;
+                torque += cross(r, f);
+                ++bodyContacts_;
+                bodyContactForce_ += fn;
+            }
+        }
+    }
+
+    // Gravity acts on the total mass at the CoM. The chassis is integrated with the total mass
+    // (so a host rigid body can simply use VehicleDefinition::mass); each unsprung wheel's own
+    // acceleration along the suspension axis is accounted for by its inertial relief force above.
     if (chassisMode_ == ChassisMode::Internal || !hostGravity_) force += gravity * def_.mass;
     forces_ = {force, torque};
 
@@ -780,6 +1010,7 @@ void Vehicle::integrateChassis(Real dt, const Vec3& extraForce) {
         const Vec3 left = body_.orientation.rotate({0, 1, 0});
         telem_.pitchAngle = -std::asin(clamp(fwd.z, -1.0, 1.0));
         telem_.rollAngle = std::asin(clamp(left.z, -1.0, 1.0));
+        telem_.upright = body_.orientation.rotate({0, 0, 1}).z;
     } else {
         // Minimal channels are always kept current (LOD1 / AI use them).
         const Vec3 vb = bodyVelocity();
@@ -787,6 +1018,7 @@ void Vehicle::integrateChassis(Real dt, const Vec3& extraForce) {
         telem_.speed = vb.x;
         telem_.lateralVelocity = vb.y;
         telem_.yawRate = yawRate();
+        telem_.upright = body_.orientation.rotate({0, 0, 1}).z;
     }
     telem_.time = time_ + dt;
 }
@@ -813,6 +1045,9 @@ void Vehicle::fillTelemetry(const DriverInput& input, const ActuatorCommands& cm
     t.drivetrain = drivetrain_.telemetry();
     t.assists = assists_.report();
     t.wheelCount = nw;
+    t.aero = aeroTel_;
+    t.bodyContacts = bodyContacts_;
+    t.bodyContactForce = bodyContactForce_;
     t.groundQueries = groundQueries_;
     for (std::size_t w = 0; w < nw; ++w) {
         const WheelState& ws = wheels_[w];
@@ -831,6 +1066,8 @@ void Vehicle::fillTelemetry(const DriverInput& input, const ActuatorCommands& cm
             const Real ux = cx > 1e-9 ? ws.forces.fx / cx : 0, uy = cy > 1e-9 ? ws.forces.fy / cy : 0;
             wt.gripUsed = ws.contact ? std::sqrt(ux * ux + uy * uy) : 0;
         }
+        wt.camber = def_.wheels[w].isLeft ? ws.camber : -ws.camber;
+        wt.temperature = ws.temperature;
         wt.steerAngle = ws.steer;
         wt.brakeTorque = cmd.brakeTorque[w];
         wt.brakeLocked = solveOut[w].brakeLocked;

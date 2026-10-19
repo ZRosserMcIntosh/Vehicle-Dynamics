@@ -39,13 +39,15 @@ add_library(ord_core
   src/core/src/single_track.cpp
   src/core/src/two_wheeler.cpp
   src/core/src/crash.cpp
+  src/core/src/aero.cpp
+  src/core/src/setup.cpp
 )
 add_library(ord::core ALIAS ord_core)
 target_include_directories(ord_core PUBLIC src/core/include)
 target_compile_options(ord_core PRIVATE ${ORD_WARNINGS})
 
 # ---- Reference vehicle definitions (fictional, for benchmarks) ----
-add_library(ord_vehicles src/vehicles/reference_vehicles.cpp)
+add_library(ord_vehicles src/vehicles/reference_vehicles.cpp src/vehicles/production_vehicles.cpp)
 add_library(ord::vehicles ALIAS ord_vehicles)
 target_include_directories(ord_vehicles PUBLIC src/vehicles)
 target_link_libraries(ord_vehicles PUBLIC ord_core)

@@ -62,7 +62,8 @@ struct TireParams {
     // Evangelou, Limebeer 2004):
     //   Fy = D sin(C atan(B alpha - E(...)) + C_g atan(B_g gamma)),
     //   B_g = camberStiffness * Fz / (C_g * D)  (so dFy/dgamma = camberStiffness * Fz at 0).
-    // 0 = no camber response; the four-wheel model passes gamma = 0 today.
+    // 0 = no camber response. Cars pass their real camber; applySetup() enables the car
+    // camber model (see enableCarCamberModel in setup.cpp).
     Real camberStiffness = 0.0;   // per rad, in units of Fz (bicycle ~0.9, motorcycle ~1.0)
     Real camberShape = 0.6;       // C_g
     // Camber twisting torque: an inclined, rolling contact patch twists the
@@ -73,6 +74,35 @@ struct TireParams {
     // 0 = thin disc. Used by the single-track model; the four-wheel model
     // keeps its flat footprint.
     Real crownRadius = 0.0;       // m
+
+    // Camber and peak grip (car tyres). A car tyre grips best leaning slightly
+    // into the turn (top of the tyre toward the turn centre: the sidewall
+    // rolls under the load and the patch flattens); away from that optimum the
+    // lateral peak drops quadratically, and any camber costs braking and
+    // traction grip. This is what static negative camber trades: more
+    // cornering grip on the loaded outside tyre against straight-line grip.
+    //   lateral:      mu_y *= 1 - camberGripLoss * (gamma_into_turn - camberOptimum)^2
+    //   longitudinal: mu_x *= 1 - camberLongGripLoss * gamma^2
+    Real camberOptimum = 0.0;         // rad, inclination into the turn at best lateral grip
+    Real camberGripLoss = 0.0;        // per rad^2 (0 = off)
+    Real camberLongGripLoss = 0.0;    // per rad^2
+
+    // Compound: response to the surface (1 = an ordinary road tyre).
+    Real wetGrip = 1.0;               // mu multiplier on a fully wet surface (SurfaceProperties::wetness)
+    Real aquaplaneSensitivity = 1.0;  // scales the surface's wet speed falloff
+    Real looseGrip = 1.0;             // mu multiplier on a fully loose surface (gravel, soil, grass)
+
+    // Tread temperature window (used when the vehicle runs the tyre thermal
+    // model, thermalCapacity > 0). Grip factor:
+    //   1 - temperatureGripLoss * ((T - optimalTemperature) / temperatureWindow)^2,
+    //   at least 0.75 cold and 0.6 overheated
+    Real optimalTemperature = 85.0;   // deg C
+    Real temperatureWindow = 40.0;    // deg C
+    Real temperatureGripLoss = 0.10;
+    Real thermalCapacity = 0.0;       // J/K of the tread layer (0 = no thermal model)
+    Real heatFraction = 0.35;         // share of the sliding power that heats the tread
+    Real coolingBase = 25.0;          // W/K at standstill
+    Real coolingPerSpeed = 6.0;       // W/K per m/s (forced convection)
 
     Real rollingResistance = 0.012;   // dimensionless coefficient
     Real pneumaticTrail = 0.035;      // m, at zero slip angle
@@ -109,6 +139,11 @@ struct SurfaceProperties {
     Real textureAmplitude = 0.0;     // m (0 = off)
     Real textureWavelength = 0.15;   // m
     Real textureVariation = 0.4;     // 0 = identical stones, 1 = heights vary 0..A per stone
+    // 0..1: how wet / how loose the surface is, for compounds that react to
+    // it (TireParams::wetGrip, looseGrip). frictionScale already holds the
+    // ordinary road tyre's grip on this surface.
+    Real wetness = 0.0;
+    Real looseness = 0.0;
 };
 
 // Height of the procedural micro-profile at a world point (0 when disabled).
@@ -141,8 +176,12 @@ public:
     // `speed` is the contact-point ground speed magnitude, used only for the wet falloff.
     // `camber` is the inclination angle to the ground normal, rad, top of the
     // wheel toward +y positive (only used when camberStiffness > 0).
+    // `gripScale` multiplies both peak coefficients (tread temperature).
     TireForces evaluate(Real fz, Real kappa, Real tanAlpha, const SurfaceProperties& surf, Real speed,
-                        Real camber = 0.0) const;
+                        Real camber = 0.0, Real gripScale = 1.0) const;
+
+    // Grip factor of the tread temperature window (1 inside the optimum).
+    Real temperatureGrip(Real temperature) const;
 
     // Pure-slip helpers (exposed for tests and tooling).
     Real pureLongitudinal(Real fz, Real kappa, Real muScale) const;
