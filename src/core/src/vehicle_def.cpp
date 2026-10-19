@@ -22,6 +22,9 @@ std::string VehicleDefinition::validate() const {
         return "centerOfMass must be finite and within 10 m of the body origin";
     if (!inRange(steeringAckermann, 0, 1)) return "steeringAckermann must be within 0..1";
     if (!inRange(topSpeedLimit, 0, 200)) return "topSpeedLimit must be within 0..200 m/s (0 = none)";
+    if (!inRange(body.overhangFront, 0, 5) || !inRange(body.overhangRear, 0, 5) || !inRange(body.halfWidth, 0, 3) ||
+        !inRange(body.height, 0, 5) || !inRange(body.floorZ, -3, 3) || !inRange(body.friction, 0, 3))
+        return "body hull sizes must be within 0..5 m (floorZ -3..3 m) and friction 0..3";
     if (wheels.empty() || wheels.size() > kMaxWheels) return "wheel count must be 1..kMaxWheels";
     if (axles.empty() || axles.size() > kMaxAxles) return "axle count must be 1..kMaxAxles";
     for (std::size_t i = 0; i < wheels.size(); ++i) {

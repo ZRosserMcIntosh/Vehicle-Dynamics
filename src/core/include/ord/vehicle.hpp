@@ -247,6 +247,12 @@ private:
     std::array<Real, kMaxWheels> rideCompression_{};  // compression at static ride height
     Vec3 wind_{};
     AeroTelemetry aeroTel_;
+    // Body collision hull (see BodyDef): points in the body frame, built once.
+    static constexpr int kHullPoints = 17 + kMaxWheels;  // body box + one tyre shoulder per wheel
+    std::array<Vec3, kHullPoints> hull_{};
+    int hullCount_ = 0;
+    int bodyContacts_ = 0;
+    Real bodyContactForce_ = 0;
     Real time_ = 0;
     Real lastDt_ = 1.0 / 240.0;
     ChassisMode chassisMode_ = ChassisMode::Internal;

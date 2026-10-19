@@ -94,6 +94,18 @@ struct AeroDef {
     } rearWing;
 };
 
+// The body as a collision hull against the ground: only touches when the car is tilted (a
+// rollover, a car on its side or roof) or fully airborne (landing a jump). Sizes are relative to
+// the wheel layout; 0 = a default for a typical car.
+struct BodyDef {
+    Real overhangFront = 0.0;  // m ahead of the front axle (0 = 0.9)
+    Real overhangRear = 0.0;   // m behind the rear axle (0 = 0.9)
+    Real halfWidth = 0.0;      // m (0 = widest track / 2 + 0.12)
+    Real height = 0.0;         // m, floor to roof (0 = 1.15)
+    Real floorZ = 0.0;         // m, floor height relative to the body origin (0 = from the hardpoints)
+    Real friction = 0.5;       // sliding friction of the body on the road (scaled by the surface)
+};
+
 struct VehicleDefinition {
     std::string name = "unnamed";
     Real mass = 1400.0;            // kg, total including unsprung masses
@@ -105,6 +117,7 @@ struct VehicleDefinition {
     Real topSpeedLimit = 0.0;      // m/s, electronic limiter: throttle fades over the last 2% (0 = none)
     DrivetrainDef drivetrain;
     AeroDef aero;
+    BodyDef body;
 
     // Returns an empty string when valid, else a human-readable reason.
     std::string validate() const;

@@ -53,6 +53,9 @@ struct TelemetryFrame {
     Real sideslip = 0;           // rad, atan2(vy, vx)
     Real yawRate = 0;            // rad/s
     Real rollAngle = 0, pitchAngle = 0;  // rad (small-angle extraction)
+    Real upright = 1;            // body up-axis z: 1 upright, 0 on its side, -1 on its roof
+    int bodyContacts = 0;        // body hull points touching the ground (rollover, roof, side)
+    Real bodyContactForce = 0;   // N, total normal force on the body hull
     Vec3 accelBody;              // m/s^2, kinematic acceleration of the CoM, body frame
     Real kineticEnergy = 0;      // J
     // Driver vs. actuator

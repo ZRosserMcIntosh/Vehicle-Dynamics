@@ -8,7 +8,7 @@ enjoyment on a gamepad and Forza Motorsport-level consequences with every aid
 off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
-> passes 135 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
+> passes 139 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
 > (Apple Clang), Windows (MSVC) and WebAssembly. It includes unsprung mass, a
 > multi-point tire contact patch with geometric envelope probes for sharp
 > edges, a per-frame ground-query cache, host (Chaos) integration with
@@ -60,6 +60,7 @@ any developer.
 | Real-car approximations | Porsche 911 Carrera S and 4S (992.2), Mercedes-AMG S 63 4MATIC+ and S 600 Guard (W222, VR9 armoured, 4.2 t), a 2026-regulation Formula 1 car, from published specifications (estimates marked), with electronic top-speed limiters ([details and limits](docs/architecture/production-cars.md)) | `tests/test_production.cpp` (0–100 km/h and top speed against the published figures) |
 | Regression guard | 13 headline metrics in `benchmarks/baseline.csv` with per-metric tolerances; changing them needs an explicit, reviewed regeneration | `tests/test_baseline.cpp` |
 | Tooling | Telemetry ring buffer + CSV, engine-agnostic debug draw (+SVG), `ordbench` report | `tools/ordbench` |
+| Rollover | A body collision hull (box, greenhouse, tyre shoulders) contacts the ground with friction once the car tilts or leaves the ground, so cars tip, trip over kerbs, land on their side or roof and slide ([details](docs/architecture/rollover.md)) | `tests/test_rollover.cpp` (rests on its roof; tipping angles by car; kerb trip vs. flat ground; never touches in normal driving) |
 | Crash survivability | Each impact's delta-V becomes a crumple-zone crash pulse; a torso + head occupant per seat (belt, airbags, door, wheel/dash) gives chest 3 ms g, HIC15 and injury risk from NHTSA's published curves, plus the Joksch delta-V statistic. A game estimate, not a validated crash simulation ([details](docs/architecture/crash-survivability.md)) | `tests/test_crash.cpp` (56 km/h belted frontal in the NCAP range; orderings for speed, pulse, belts, airbags, side) |
 | Tuning garage | `VehicleSetup` in setup-sheet units: camber / toe / caster / camber gain (ground camber from geometry and body roll), springs, ride height, two-stage dampers, ARBs, **tyre compounds** (off-road … slick, rain) with **pressure and tread temperature**, brake balance, diff and gears, **aero** (ride-height-sensitive floor with stall, rear wing with a real stall, wind and yaw, altitude via the ISA, ported from Aviation Dynamics), JSON save/load ([details](docs/architecture/tuning-garage.md)) | `tests/test_garage.cpp` (compound ladders dry/wet/gravel, camber vs braking, brake-balance spin, wing stall, floor stall, crosswind) |
 | Two-wheelers (prototype) | **Benchmark bicycle**: nonlinear 4-body single-track multibody model (Whipple rolling contact or tyres with **camber thrust and a rounded crown** on any ground). **Rideable** bicycle, e-scooter and sport motorcycle: virtual rider (counter-steer emerges), brakes, ABS, traction and wheelie control. No suspension or gearbox yet ([plan and limits](docs/architecture/two-wheelers.md)) | `tests/test_single_track.cpp` (Meijaard et al. 2007 weave/capsize speeds reproduced to ~1e-11 m/s), `tests/test_two_wheeler.cpp` |
@@ -107,7 +108,7 @@ Requires CMake ≥ 3.20 and a C++20 compiler.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure      # 135 test cases
+ctest --test-dir build --output-on-failure      # 139 test cases
 ./build/ordbench                                # Markdown benchmark report
 ./build/ordbench --csv-dir /tmp/traces          # per-step telemetry CSV for plotting
 ./build/ordbench --write-baseline               # regenerate benchmarks/baseline.csv (reviewed changes only)
@@ -159,7 +160,7 @@ web/               WebAssembly bindings and smoke test for the browser demo
 tests/             unit, regression and benchmark tests (no dependencies)
 docs/research/     Forza public research, telemetry, KinetiForge audit, alternatives, tire parameters
 docs/architecture/ architecture, drivetrain solver, presets & drift assist, open world & LOD,
-                   tuning garage, crash survivability, two-wheelers, performance & risks
+                   tuning garage, crash survivability, rollover, two-wheelers, performance & risks
 docs/benchmarks/   benchmark plan, telemetry channels, baseline results
 docs/decisions/    architecture decision records
 docs/roadmap.md    milestones and priorities
