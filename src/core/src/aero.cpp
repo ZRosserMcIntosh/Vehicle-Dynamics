@@ -93,10 +93,5 @@ Real liftCurveSlope3D(Real ar, Real a2d) {
     return 2 * kPi * ar / (2 + std::sqrt((ar / kappa) * (ar / kappa) + 4));
 }
 
-Real groundEffectFactor(Real h, Real b) {
-    if (b <= 0 || h <= 0) return h <= 0 ? 0.05 : 1.0;
-    const Real x = (16 * h / b) * (16 * h / b);
-    return std::max(x / (1 + x), 0.05);
-}
 
 }  // namespace ord

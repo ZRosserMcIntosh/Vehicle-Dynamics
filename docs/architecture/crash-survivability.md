@@ -50,8 +50,8 @@ These are the measures and published curves NHTSA and NCAP use:
 | Metric | Definition | Reference |
 |---|---|---|
 | HIC15 | max over windows ≤ 15 ms of (t2 − t1)·(mean head acceleration in g)^2.5; limit 700 | FMVSS 208 |
-| Chest 3 ms clip | highest torso acceleration held for 3 ms; limit 60 g | FMVSS 208 |
-| Serious head injury (AIS3+) | Φ((ln HIC15 − 7.45231) / 0.73998) | NHTSA 1997 |
+| Chest 3 ms clip | highest torso acceleration held for a contiguous 3 ms (FMVSS 208 counts cumulative time above a level, which reads higher on a spiky trace); limit 60 g | FMVSS 208 |
+| Serious head injury (AIS3+) | Φ((ln HIC15 − 7.45231) / 0.73998) | Eppinger et al., NHTSA 1999 |
 | Life-threatening injury (AIS4+) | head 1/(1+e^(5.02−0.00351·HIC)), chest 1/(1+e^(5.55−0.0693·A3ms)), joined as 1 − (1−Ph)(1−Pc) | NCAP before 2011 |
 | Delta-V fatality statistic | (delta-V / 71 mph)^4 | Joksch 1993 |
 
@@ -125,7 +125,7 @@ chest of 19, 31 or 45 g and a HIC of 60, 119 or 192.
 ## References
 
 - NHTSA, FMVSS No. 208 *Occupant crash protection* (HIC15 ≤ 700, chest 3 ms ≤ 60 g).
-- NHTSA, *Development of improved injury criteria for the assessment of advanced automotive restraint systems*, 1999; head AIS3+ risk Φ((ln HIC − 7.45231)/0.73998).
+- R. Eppinger et al. (NHTSA), *Development of improved injury criteria for the assessment of advanced automotive restraint systems II*, 1999; head AIS3+ risk Φ((ln HIC − 7.45231)/0.73998).
 - NHTSA NCAP (pre-2011) injury-risk functions: head 1/(1+e^(5.02−0.00351·HIC)), chest 1/(1+e^(5.55−0.0693·A)).
 - H.C. Joksch, "Velocity change and fatality risk in a crash: a rule of thumb", *Accident Analysis & Prevention* 25(1):103–104, 1993.
 - M. Huang, *Vehicle Crash Mechanics*, CRC Press, 2002 (crash pulses, spring-mass occupant models).

@@ -783,14 +783,15 @@ ORD_EXPORT void ord_set_wind(double wx, double wy) {
     if (g.vehicle) g.vehicle->setWind(g.wind);
 }
 namespace {
-constexpr int kGarageState = 12 + 4 * kMaxWheels;
+constexpr int kGarageState = 14 + 4 * kMaxWheels;
 std::array<double, kGarageState> g_garage{};
 }  // namespace
 // Garage readouts, refreshed on call: aero (airspeed, airflow yaw, front/rear
 // downforce, drag, wing downforce, floor clearance front/rear, wing stalled,
-// floor stalled, ambient C, air density), then per wheel: camber (rad,
-// negative = top in), tread temperature (C), the tyre's optimal temperature,
-// and its grip factor from temperature.
+// floor stalled, ambient C, air density, front and rear roll-centre height
+// above the ground in m), then per wheel: camber (rad, negative = top in),
+// tread temperature (C), the tyre's optimal temperature, and its grip factor
+// from temperature.
 ORD_EXPORT double* ord_garage_state() {
     g_garage.fill(0);
     if (!g.vehicle) return g_garage.data();
@@ -802,9 +803,10 @@ ORD_EXPORT double* ord_garage_state() {
     o[5] = a.wingDownforce; o[6] = a.clearanceFront; o[7] = a.clearanceRear;
     o[8] = a.wingStalled ? 1 : 0; o[9] = a.floorStalled ? 1 : 0;
     o[10] = v.definition().aero.ambientTemperature; o[11] = v.definition().aero.airDensity;
+    o[12] = t.rollCentreHeight[0]; o[13] = v.definition().axles.size() > 1 ? t.rollCentreHeight[1] : 0.0;
     for (std::size_t w = 0; w < t.wheelCount; ++w) {
         const TireParams& tp = v.definition().wheels[w].tire;
-        double* p = o + 12 + 4 * static_cast<int>(w);
+        double* p = o + 14 + 4 * static_cast<int>(w);
         p[0] = t.wheels[w].camber; p[1] = t.wheels[w].temperature; p[2] = tp.optimalTemperature;
         p[3] = tp.thermalCapacity > 0 ? MagicFormulaTire(tp).temperatureGrip(t.wheels[w].temperature) : 1.0;
     }

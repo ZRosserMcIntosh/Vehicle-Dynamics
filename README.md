@@ -8,7 +8,7 @@ enjoyment on a gamepad and Forza Motorsport-level consequences with every aid
 off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
-> passes 140 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
+> passes 151 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
 > (Apple Clang), Windows (MSVC) and WebAssembly. It includes unsprung mass, a
 > multi-point tire contact patch with geometric envelope probes for sharp
 > edges, a per-frame ground-query cache, host (Chaos) integration with
@@ -51,6 +51,7 @@ any developer.
 |---|---|---|
 | Tire | Reduced Pacejka Magic Formula: load sensitivity, combined slip, relaxation-length transient slip, standstill stiffness, **camber thrust** and a camber peak-grip model (best ~2° into the turn), wet grip and aquaplaning, loose-surface grip, a one-node **tread temperature** with a grip window, inflation pressure. **Parameter generator** from public tire size/category | `tests/test_tire.cpp`, `tests/test_garage.cpp` |
 | Contact & suspension | **Multi-point contact patch** (1/5/8/9 samples), **implicit unsprung-mass DOF** per corner, springs, **two-stage (slow/fast) dampers**, ARB, bump stops, wheel camber from static camber, camber gain, caster and body roll, **procedural surface micro-texture** for paving | `tests/test_contact.cpp` (frequencies match the analytic quarter car to <0.1%) |
+| Suspension kinematics | **Double-wishbone and MacPherson linkages** solved from their pivot geometry at construction: camber and toe curves (bump steer, roll steer), the wheel's path, **roll centres and jacking**, **anti-dive / anti-squat**, the spring's **motion ratio**; the ride height moves the operating point along the curves. The Stella and the real cars use them; the reference cars keep sliders so the baseline stands ([details](docs/architecture/suspension-kinematics.md)) | `tests/test_kinematics.cpp` (3-D solve vs. an independent 2-D four-bar to 1e-5; roll centre vs. the graphical construction; a +95 mm roll centre cuts roll 16 %; anti-dive cuts dive 37 % at the same stopping distance) |
 | Drivetrain | Engine curve, governor, limiter, clutch, gearbox, open/locked/LSD diffs, AWD split, all solved implicitly with stick/slip friction | `tests/test_drivetrain.cpp` |
 | Assists | Speed-sensitive gamepad steering (full countersteer reachable in a slide), ABS, brake-based TCS, ESC, countersteer aid, **drift assist** (steering sets the drift angle and throttle holds it; countersteer and throttle trim only; full lock and throttle from a crawl spins **donuts**), auto/manual shifting, an auto clutch that opens with the handbrake like a drifter's foot. Real actuators only; every intervention reported ([presets and drift assist](docs/architecture/driving-presets.md)) | `tests/test_assists.cpp` |
 | Lightness | **Ground prefetch cache** (per-frame adaptive strips; no scene queries from substeps or the physics thread), **vehicle-local substepping** inside a 60 Hz world, **host integration mode** for Chaos | `tests/test_contact.cpp`, `tests/test_host.cpp` |
@@ -108,7 +109,7 @@ Requires CMake ≥ 3.20 and a C++20 compiler.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure      # 140 test cases
+ctest --test-dir build --output-on-failure      # 151 test cases
 ./build/ordbench                                # Markdown benchmark report
 ./build/ordbench --csv-dir /tmp/traces          # per-step telemetry CSV for plotting
 ./build/ordbench --write-baseline               # regenerate benchmarks/baseline.csv (reviewed changes only)
@@ -160,7 +161,8 @@ web/               WebAssembly bindings and smoke test for the browser demo
 tests/             unit, regression and benchmark tests (no dependencies)
 docs/research/     Forza public research, telemetry, KinetiForge audit, alternatives, tire parameters
 docs/architecture/ architecture, drivetrain solver, presets & drift assist, open world & LOD,
-                   tuning garage, crash survivability, rollover, two-wheelers, performance & risks
+                   tuning garage, suspension kinematics, crash survivability, rollover, two-wheelers,
+                   performance & risks
 docs/benchmarks/   benchmark plan, telemetry channels, baseline results
 docs/decisions/    architecture decision records
 docs/roadmap.md    milestones and priorities
@@ -184,8 +186,8 @@ being quoted.
 ## Roadmap
 
 Next: a test bench for setups (scripted manoeuvres, side-by-side setup
-comparison, parameter sweeps) → kinematic suspension from hardpoints → compile
-and validate the UE5 plugin (Chaos parity < 1%, real ray costs) → proving-ground
+comparison, parameter sweeps) → compliance and solid axles on top of the linkage
+kinematics → compile and validate the UE5 plugin (Chaos parity < 1%, real ray costs) → proving-ground
 level and Chaos Vehicles A/B → multiplayer. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Versioning

@@ -154,6 +154,9 @@ VehicleDefinition applySetup(const VehicleDefinition& stock, const VehicleSetup&
             w.camberGain = x.camberGainDegPerCm * kDeg * 100.0;
             w.suspension.springRate = std::max(1.0, x.springNmm) * 1000.0;
             w.suspension.hardpoint.z -= x.rideHeightMm / 1000.0;  // lower hardpoint = wheel further down = car higher
+            // A real linkage then sits further into droop at rest (or into bump when
+            // lowered), and its camber and toe curves move with it.
+            w.suspension.linkage.rideOffset = -x.rideHeightMm / 1000.0;
             w.suspension.bumpDamping = std::max(0.0, x.bumpSlow);
             w.suspension.bumpDampingFast = std::max(0.0, x.bumpFast);
             w.suspension.reboundDamping = std::max(0.0, x.reboundSlow);
