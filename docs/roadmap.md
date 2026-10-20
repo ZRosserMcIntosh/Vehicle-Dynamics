@@ -37,7 +37,8 @@ Prioritised by "what unlocks measurable driving quality soonest". Each item has 
 - [x] Crash survivability: crash pulses, belted/airbag occupants, chest g, HIC15, injury risk ([crash-survivability.md](architecture/crash-survivability.md))
 - [x] Tuning garage: alignment and camber geometry, two-stage dampers, tyre compounds with pressure and temperature, brake balance, gears, aero with floor and wing stall, wind and altitude, JSON setups ([tuning-garage.md](architecture/tuning-garage.md))
 - [ ] Test bench: scripted manoeuvres, side-by-side setup comparison, parameter sweeps
-- [ ] Kinematic suspension from hardpoints (M2.3)
+- [x] Suspension kinematics: double-wishbone and MacPherson linkages from pivot geometry, camber/toe curves, roll centres and jacking, anti-dive/anti-squat, motion ratio ([suspension-kinematics.md](architecture/suspension-kinematics.md))
+- [ ] Solid axles and bushing compliance on top of the linkage kinematics
 
 ## M1 — Unreal Engine 5 adapter (next: compile and validate)
 
@@ -53,8 +54,8 @@ Prioritised by "what unlocks measurable driving quality soonest". Each item has 
 
 1. **Unsprung mass DOF** per corner (wheel hop, harshness). *Accept:* B20, B22 natural frequencies within 3% of analytic.
 2. **Multi-point contact patch** (5 → 8 samples, perimeter + centre, weighted plane fit). *Accept:* B19 curb load spikes converge with sample count. Rate × samples matrix published.
-3. **Kinematic suspension**: camber/toe/caster vs travel curves (linear camber gain and caster done in the garage), then geometric solvers (MacPherson, double wishbone, solid axle), adapting KinetiForge's MIT solvers with attribution. *Accept:* analytic-geometry tests.
-4. Anti-dive / anti-squat / roll-centre load paths.
+3. **Kinematic suspension** ✅: double-wishbone and MacPherson linkages solved from their own geometry (no third-party solver needed); solid axle still open. *Accepted:* 3-D solve matches an independent 2-D four-bar to 1e-5, roll centre matches the graphical construction.
+4. Anti-dive / anti-squat / roll-centre load paths ✅ (they fall out of the linkage path; tested).
 5. **Fixed-rate decision**: 120/240/360 Hz on rough-road benchmarks → default for LOD0.
 
 ## M3 — Tire depth
@@ -95,9 +96,9 @@ Bicycles, e-scooters/e-bikes and motorcycles at car-level fidelity. Plan, result
 
 ## Next five engineering priorities
 
-0. Garage test bench (scripted manoeuvres, setup comparison, sweeps), then kinematic suspension from hardpoints (M2.3)
+0. Garage test bench (scripted manoeuvres, setup comparison, sweeps)
 1. Compile the UE5 plugin on UE 5.4–5.6 and resolve the API assumptions recorded in its audit (M1.1–M1.3)
 2. Build the proving-ground level from the documented steps and drive the first car in Unreal; record headless-vs-Chaos parity (< 1% target on B1/B2/B4/B5) and real ray costs (M1.2, M1.6)
 3. Tire cleat-test calibration to settle the 5- vs 8-sample contact layout sensitivity (~30% on sharp curbs) and add continuous effective-road-profile enveloping (M2.2)
 4. Wet model: water-film depth on strips, speed-dependent grip, aquaplaning (M3.2)
-5. Kinematic suspension (camber/toe curves, geometric solvers with KinetiForge attribution) (M2.3)
+5. Solid axles, bushing compliance and tilted contact samples on top of the linkage kinematics (M2.3)

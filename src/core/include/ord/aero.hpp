@@ -6,16 +6,13 @@
 // to cars: the standard atmosphere for air density (São Paulo sits at
 // ~760 m, where the air is ~8% thinner than at sea level), a full-range wing
 // section polar (attached lift, a smooth stall, Viterna-Corrigan post-stall)
-// for rear wings, the Helmbold 3-D lift slope and McCormick's ground-effect
-// factor.
+// for rear wings and the Helmbold 3-D lift slope.
 //
 // References (as in Aviation Dynamics):
 //  - U.S. Standard Atmosphere 1976 (troposphere: T = 288.15 - 0.0065 h,
 //    p = p0 (T/T0)^(g0/(R L))).
 //  - Helmbold equation, USAF DATCOM 4.1.3.2.
 //  - Viterna & Corrigan (1982), NASA CP-2230 (post-stall).
-//  - McCormick, "Aerodynamics, Aeronautics and Flight Mechanics" (ground
-//    effect factor (16h/b)^2 / (1 + (16h/b)^2)).
 //  - Katz, "Race Car Aerodynamics" (1995) for the car-specific use: inverted
 //    wings, ride-height sensitive floors and their stall.
 #pragma once
@@ -55,8 +52,5 @@ WingSectionResult evaluateWingSection(const WingSectionPolar& p, Real alpha, Rea
 
 // Helmbold/DATCOM 3-D lift-curve slope for aspect ratio AR (unswept).
 Real liftCurveSlope3D(Real aspectRatio, Real a2d = 2 * kPi * 0.95);
-
-// McCormick ground-effect factor on induced drag (1 far from the ground).
-Real groundEffectFactor(Real height, Real span);
 
 }  // namespace ord

@@ -62,7 +62,8 @@ at the speed it had. `ord_setup_json(stock)` puts the current setup (or the stoc
 `ord_garage_state()` returns `ord_garage_state_size()` doubles:
 - 0–11: airspeed, airflow yaw, front and rear downforce, drag, wing downforce, floor clearance
   front and rear, wing stalled, floor stalled, ambient °C, air density.
-- Then 4 per wheel: camber (rad, negative = top in), tread °C, optimal °C, grip factor from
+- 12–13: front and rear roll-centre height above the ground (m), from the suspension linkage.
+- Then, from 14, 4 per wheel: camber (rad, negative = top in), tread °C, optimal °C, grip factor from
   temperature.
 
 ## Two-wheelers

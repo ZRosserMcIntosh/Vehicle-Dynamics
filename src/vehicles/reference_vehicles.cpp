@@ -264,9 +264,15 @@ VehicleDefinition rosserStellaV8() {
     f.suspension.reboundDamping = 5200;
     f.maxSteerAngle = 0.55;
     f.maxBrakeTorque = 3800;       // carbon-ceramic
+    // Double wishbones at both ends (mid-engine sports car): the front with
+    // mild anti-dive, the rear with a touch of anti-squat; representative
+    // geometry, not from any drawing.
+    f.suspension.linkage = makeDoubleWishbone(0.40, 0.29, 0.30, 0.06, 0.10, 0.55);
+    f.camberGain = 0;              // the linkage provides the camber curve
     WheelDef r = f;
     r.tire = generateTireParams(rs);
     r.suspension.springRate = 64000;
+    r.suspension.linkage = makeDoubleWishbone(0.45, 0.33, 0.30, 0.05, -0.06, 0.60);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 2300;
     r.handbrakeTorque = 2600;

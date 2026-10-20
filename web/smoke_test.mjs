@@ -35,6 +35,19 @@ for (let i = 0; i < 60 * 20; ++i) {
 check('circle lateral g', maxLat > 0.3 && maxLat < 1.3 && s[23] === 0, maxLat.toFixed(2));
 check('ground height flat at start', M._ord_ground_height(0, 0) === 0, '');
 check('speed bump present', M._ord_ground_height(60, M._ord_bump_lane_y()) > 0.07, '');
+// Suspension kinematics: the Stella's wishbones report roll centres above the ground; the
+// reference sports car's sliders sit at the ground.
+{
+  const gs = () => new Float64Array(M.HEAPF64.buffer, M._ord_garage_state(), M._ord_garage_state_size());
+  M._ord_set_preset(1); M._ord_create(5, 0, 0, 0);
+  for (let i = 0; i < 60; ++i) { M._ord_set_input(0, 0, 1, 0, 0, 0); M._ord_advance(1 / 60); }
+  const stella = gs().slice();  // copy: the next call refills the same buffer
+  M._ord_create(0, 0, 0, 0);
+  for (let i = 0; i < 60; ++i) { M._ord_set_input(0, 0, 1, 0, 0, 0); M._ord_advance(1 / 60); }
+  const slider = gs().slice();
+  check('kinematics roll centres', stella[12] > 0.05 && stella[12] < 0.2 && stella[13] > 0.05 && Math.abs(slider[12]) < 1e-9,
+        `Stella ${(stella[12] * 1000).toFixed(0)} / ${(stella[13] * 1000).toFixed(0)} mm, slider ${(slider[12] * 1000).toFixed(1)} mm`);
+}
 // Rosser Stella V8 (car 5): revs to its 9,000 rpm limiter and pulls through the gears.
 M._ord_set_preset(1); M._ord_set_aids(1, 1, 0, 1);
 check('create Stella', M._ord_create(5, 0, 0, 0) === 1, '');
@@ -152,8 +165,8 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
   const gs = () => new Float64Array(M.HEAPF64.buffer, M._ord_garage_state(), M._ord_garage_state_size());
   for (let i = 0; i < 60 * 12; ++i) { M._ord_set_input(0, state()[7] < 50 ? 1 : 0.3, 0, 0, 0, 0); M._ord_advance(1 / 60); }
   const g0 = gs();
-  check('garage setup applies (slicks, wing, -3 deg)', ok === 1 && g0[5] > 200 && g0[12] * 57.3 < -2 && g0[13] > 60,
-        `${(state()[7] * 3.6).toFixed(0)} km/h, wing ${g0[5].toFixed(0)} N, FL camber ${(g0[12] * 57.3).toFixed(1)} deg, FL ${g0[13].toFixed(0)} C (window ${g0[14].toFixed(0)} C)`);
+  check('garage setup applies (slicks, wing, -3 deg)', ok === 1 && g0[5] > 200 && g0[14] * 57.3 < -2 && g0[15] > 60,
+        `${(state()[7] * 3.6).toFixed(0)} km/h, wing ${g0[5].toFixed(0)} N, FL camber ${(g0[14] * 57.3).toFixed(1)} deg, FL ${g0[15].toFixed(0)} C (window ${g0[16].toFixed(0)} C)`);
   M._ord_setup_json(0);
   check('garage setup reads back', JSON.parse(text()).rear.compound === 'slick', '');
   M._ord_clear_setup(); M._ord_set_tyre_warmers(-1);
