@@ -149,6 +149,41 @@ check('wheelspin holds the gear', maxGear === 1 && s[23] === 0, `max gear ${maxG
   check('rollover ramp', !slow.faulted && !fast.faulted && !guard.faulted && !f1.faulted && slow.minUp > 0.7 && fast.minUp < 0 && guard.minUp < 0 && f1.minUp > 0.7,
         `upright min: sports 50 km/h ${slow.minUp.toFixed(2)}, 110 km/h ${fast.minUp.toFixed(2)}; Guard 75 km/h ${guard.minUp.toFixed(2)}; F1 120 km/h ${f1.minUp.toFixed(2)}`);
 }
+// Breakable walls on the smash lane: a storefront pane gives at a walking pace and barely slows the
+// car; a hollow-block wall holds at 15 km/h and is breached at 40 for ~6 km/h; a brick wall holds at
+// 30 and is breached at 60 for ~20 km/h. A section that has been broken stays a hole until reset.
+{
+  const xb = M._ord_crash_barrier_x();
+  const smash = (lane, kmh, reset = true) => {
+    M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+    M._ord_create(0, xb - (kmh < 25 ? 30 : 150), M._ord_smash_lane_y(lane), 0);
+    if (reset) M._ord_reset_obstacles();
+    M._ord_break_events();
+    let before = 0, after = null, passedAt = -1, breaks = 0, kept = 0;
+    for (let i = 0; i < 60 * 40; ++i) {
+      const s = state(), v = s[7], want = kmh / 3.6, approaching = s[0] < xb - 3;
+      if (approaching) before = v;
+      M._ord_set_input(0, approaching ? (v < want - 0.5 ? 1 : v < want ? 0.3 : 0) : 0, approaching && v > want + 0.5 ? 0.3 : 0, 0, 0, 0); M._ord_advance(1 / 60);
+      const n = M._ord_break_events();
+      if (n) { breaks += n; kept = new Float64Array(M.HEAPF64.buffer, M._ord_break_buffer(), 8)[7]; }
+      if (after === null && state()[0] > xb + 4) { after = state()[7]; passedAt = i; }
+      if (passedAt >= 0 && i > passedAt + 60) break;
+      if (passedAt < 0 && i > 60 * 10 && state()[7] < 0.3) break;  // bounced off and stopped
+    }
+    return { before: before * 3.6, after: after === null ? null : after * 3.6, breaks, kept };
+  };
+  const g = smash(0, 30), cbHold = smash(1, 15), cb = smash(1, 40), brHold = smash(2, 30), br = smash(2, 60), hole = smash(2, 30, false);
+  check('glass storefront shatters at 30 km/h and barely slows the car', g.breaks >= 1 && g.after !== null && g.before - g.after < 4,
+        `${g.before.toFixed(1)} -> ${g.after?.toFixed(1)} km/h, ${g.breaks} pane(s), kept ${(100 * g.kept).toFixed(0)}% of the energy`);
+  check('block wall holds at 15 km/h', cbHold.breaks === 0 && cbHold.after === null, `${cbHold.before.toFixed(1)} km/h, bounced`);
+  check('block wall breached at 40 km/h', cb.breaks >= 1 && cb.after !== null && cb.before - cb.after > 3 && cb.before - cb.after < 10,
+        `${cb.before.toFixed(1)} -> ${cb.after?.toFixed(1)} km/h, ${cb.breaks} section(s)`);
+  check('brick wall holds at 30 km/h', brHold.breaks === 0 && brHold.after === null, `${brHold.before.toFixed(1)} km/h, bounced`);
+  check('brick wall breached at 60 km/h', br.breaks >= 1 && br.after !== null && br.before - br.after > 12 && br.before - br.after < 28,
+        `${br.before.toFixed(1)} -> ${br.after?.toFixed(1)} km/h, ${br.breaks} section(s)`);
+  check('a broken section stays a hole until reset', hole.breaks === 0 && hole.after !== null, `${hole.before.toFixed(1)} -> ${hole.after?.toFixed(1)} km/h through the hole`);
+  M._ord_reset_obstacles();
+}
 // Garage: read the stock setup as JSON, fit slicks and a rear wing, warm the tyres; the readouts
 // show the wing's downforce and hot tyres. A malformed setup is refused with a reason.
 {
