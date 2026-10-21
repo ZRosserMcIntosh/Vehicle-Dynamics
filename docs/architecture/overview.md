@@ -86,7 +86,7 @@ The core returns state, forces and telemetry.
 |---|---|---|
 | Tire | Reduced MF + load sensitivity + combined slip + relaxation; parameter generator from tire size/category | Camber, MF 6.x import, thermal/pressure/wear, wet model |
 | Contact | Flat-footprint multi-point patch (1/5/8/9), procedural surface texture | Sweep fallback for large obstacles |
-| Suspension | Unsprung-mass DOF (implicit), spring/damper/ARB/bump stops; massless mode for LOD1 | Kinematic curves and geometric solvers (MacPherson, double wishbone, solid axle) |
+| Suspension | Unsprung-mass DOF (implicit), spring/damper/ARB/bump stops; massless mode for LOD1; double-wishbone and MacPherson linkage kinematics (camber/toe curves, roll centres, anti-dive, motion ratio) | Solid axles, bushing compliance |
 | Drivetrain | Engine curve, governor, limiter, clutch, gearbox, open/locked/LSD diffs, AWD split | Turbo, EV/hybrid, torque converter, viscous couplings |
 | Aero | Drag, axle downforce | Ride-height sensitivity, active aero, slipstream |
 | Assists | Steering shaping, ABS, TCS, ESC, countersteer, auto/manual shifting | Brake assist, launch, FFB, speed estimator |

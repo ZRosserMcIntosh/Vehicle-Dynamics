@@ -50,10 +50,14 @@ VehicleDefinition porsche911Base(Real mass, Real frontShare) {
     f.suspension.reboundDamping = 4500;
     f.maxSteerAngle = 0.50;           // est. from the 11.2 m turning circle (published)
     f.maxBrakeTorque = 3400;          // 408 mm front discs (published), torque est.
+    // MacPherson strut front (published layout); representative geometry with a little anti-dive.
+    f.suspension.linkage = makeMacPherson(0.38, 0.58, 0.07, 0.10);
     WheelDef r = f;
     r.tire = generateTireParams({305, 30, 21, TireCategory::UltraHighPerformance, cornerLoad(mass, 1 - frontShare)});
     r.unsprungMass = 42;
     r.suspension.springRate = 52000;  // est.: carries ~62% of the car
+    // Multilink rear (published layout) approximated as a double wishbone with anti-squat.
+    r.suspension.linkage = makeDoubleWishbone(0.44, 0.33, 0.30, 0.05, -0.08, 0.60);
     r.suspension.bumpDamping = 3800;
     r.suspension.reboundDamping = 5600;
     r.maxSteerAngle = 0;              // optional rear-axle steering not modelled
@@ -145,9 +149,13 @@ VehicleDefinition mercedesAmgS63() {
     f.suspension.reboundDamping = 5600;
     f.maxSteerAngle = 0.54;           // est. from a ~12.3 m turning circle
     f.maxBrakeTorque = 3800;          // 390 mm front discs (published), torque est.
+    // Four-link front and multilink rear (published layouts), both approximated as double
+    // wishbones with representative geometry: long arms, moderate camber gain.
+    f.suspension.linkage = makeDoubleWishbone(0.42, 0.32, 0.32, 0.06, 0.12, 0.50);
     WheelDef r = f;
     r.tire = generateTireParams({285, 35, 20, TireCategory::UltraHighPerformance, cornerLoad(d.mass, 1 - frontShare)});
     r.suspension.springRate = 40000;
+    r.suspension.linkage = makeDoubleWishbone(0.45, 0.34, 0.30, 0.04, -0.08, 0.60);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 2400;          // 360 mm rear discs (published), torque est.
     r.handbrakeTorque = 1500;
@@ -208,9 +216,11 @@ VehicleDefinition mercedesS600Guard() {
     f.suspension.reboundDamping = 13000;
     f.maxSteerAngle = 0.52;
     f.maxBrakeTorque = 6200;         // six-piston front calipers, larger discs (published), torque est.
+    f.suspension.linkage = makeDoubleWishbone(0.42, 0.32, 0.32, 0.06, 0.12, 0.50);  // W222 platform, as the S 63
     WheelDef r = f;
     r.tire = generateTireParams({255, 45, 19, TireCategory::Touring, cornerLoad(d.mass, 1 - frontShare)});
     r.suspension.springRate = 110000;
+    r.suspension.linkage = makeDoubleWishbone(0.45, 0.34, 0.30, 0.04, -0.08, 0.60);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 3800;
     r.handbrakeTorque = 2500;
@@ -262,10 +272,14 @@ VehicleDefinition formula1Car2026() {
     f.suspension.bumpStopRate = 1500000;
     f.maxSteerAngle = 0.30;
     f.maxBrakeTorque = 4500;         // carbon brakes (est.)
+    // Double wishbones with long, nearly parallel arms (little camber change over the short
+    // travel) and the spring reached through a pushrod from the upright (regulated layout).
+    f.suspension.linkage = makeDoubleWishbone(0.55, 0.50, 0.26, 0.03, 0.05, 0.90);
     WheelDef r = f;
     r.tire = generateTireParams({375, 34, 18, TireCategory::Slick, cornerLoad(d.mass, 1 - frontShare) * 2.0});
     r.unsprungMass = 14;
     r.suspension.springRate = 220000;
+    r.suspension.linkage = makeDoubleWishbone(0.55, 0.50, 0.26, 0.03, -0.03, 0.90);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 3000;
     // Wheelbase 3.4 m max, 1.9 m overall width (published); tracks est.

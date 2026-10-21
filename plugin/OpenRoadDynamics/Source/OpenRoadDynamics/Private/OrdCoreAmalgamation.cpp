@@ -17,6 +17,7 @@
 // -Wshadow-all -Werror); it has not been compiled by UnrealBuildTool.
 
 #include "src/aero.cpp"
+#include "src/kinematics.cpp"
 #include "src/assists.cpp"
 #include "src/crash.cpp"
 #include "src/debug_draw.cpp"

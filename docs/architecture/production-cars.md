@@ -31,6 +31,15 @@ manufacturer CAD, telemetry or other proprietary data is used.
 | S 600 Guard | 6.7 s | not published | 209 km/h (limited) | 210 km/h |
 | F1 (2026) | 2.6 s | ~2.6 s (typical) | 312 km/h | ~340 km/h in low-drag mode |
 
+## Suspension
+
+The published suspension *types* are used: MacPherson struts at the front of the 911 and
+double wishbones elsewhere (the four-link and multilink axles of the W222 and the 911's rear are
+approximated as double wishbones; the F1 car's pushrods as a spring fraction). The pivot
+coordinates are representative, not from any drawing. See
+[suspension-kinematics.md](suspension-kinematics.md) for what they give: camber and toe curves,
+roll centres of 57–87 mm, anti-dive at the front and anti-squat at the rear.
+
 ## Limits
 
 - Not modelled: launch control, turbo lag, the 911's optional rear-axle steering, adaptive

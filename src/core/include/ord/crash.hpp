@@ -32,7 +32,10 @@
 //    - HIC15: Head Injury Criterion, max over windows <= 15 ms of
 //      (t2 - t1) * (mean acceleration in g)^2.5. Limit 700 (FMVSS 208).
 //    - Chest 3 ms clip: highest acceleration sustained for 3 ms. Limit 60 g.
-//    - Head AIS3+ risk: Phi((ln HIC15 - 7.45231) / 0.73998)  (NHTSA, 1997).
+//      (Measured over contiguous 3 ms windows; FMVSS 208 counts cumulative
+//      time above a level, which reads higher on a spiky trace.)
+//    - Head AIS3+ risk: Phi((ln HIC15 - 7.45231) / 0.73998)  (Eppinger et al.,
+//      NHTSA, 1999).
 //    - Head AIS4+ risk: 1 / (1 + exp(5.02 - 0.00351 HIC)) and chest AIS4+
 //      risk: 1 / (1 + exp(5.55 - 0.0693 A3ms)) (NCAP before 2011), joined as
 //      1 - (1 - Ph)(1 - Pc): the life-threatening injury risk.

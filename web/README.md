@@ -62,7 +62,8 @@ at the speed it had. `ord_setup_json(stock)` puts the current setup (or the stoc
 `ord_garage_state()` returns `ord_garage_state_size()` doubles:
 - 0–11: airspeed, airflow yaw, front and rear downforce, drag, wing downforce, floor clearance
   front and rear, wing stalled, floor stalled, ambient °C, air density.
-- Then 4 per wheel: camber (rad, negative = top in), tread °C, optimal °C, grip factor from
+- 12–13: front and rear roll-centre height above the ground (m), from the suspension linkage.
+- Then, from 14, 4 per wheel: camber (rad, negative = top in), tread °C, optimal °C, grip factor from
   temperature.
 
 ## Two-wheelers
@@ -99,3 +100,18 @@ contact, serious head injury risk, life-threatening injury risk, Joksch delta-V 
 0 walks away … 4 critical) and the seat y. The test track has a crash-test lane
 (`ord_crash_lane_y`, `ord_crash_barrier_x`, `ord_crash_pole_x`): a rigid barrier and a 30 cm pole.
 See [crash-survivability.md](../docs/architecture/crash-survivability.md).
+
+## Breakable walls
+
+North of the crash lane, three run-up lanes (`ord_smash_lane_y(k)`: 0 glass storefront, 1
+hollow-block wall, 2 brick wall) end in a wall at the barrier's x, each built from three 2.5 m
+sections. A section has a fracture energy (representative estimates: 1.5 kJ for a 10 mm pane,
+25 kJ for an unreinforced block wall 2 m high, 120 kJ for a double-wythe brick wall). A hit whose
+energy along the wall normal (with the effective mass at the contact) exceeds what is left of it
+breaks the section: the car keeps the rest of its energy and passes through, and the occupants see
+the milder speed change as their crash pulse. A hit that falls short is a rigid collision, and
+half its energy stays as damage, so repeated ramming breaks a wall. `ord_obstacles()` lists every
+segment for drawing (8 doubles: endpoints, z range, material, broken); `ord_break_events()` returns
+how many sections broke since the last call, with 8 doubles each in `ord_break_buffer()` (segment,
+material, hit x, y, wall normal x, y, closing speed, fraction of the energy the car kept).
+`ord_reset_obstacles()` rebuilds them, as `ord_reset()` does. Debris is the page's job.

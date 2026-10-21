@@ -12,6 +12,7 @@
 
 #include "ord/aero.hpp"
 #include "ord/drivetrain.hpp"
+#include "ord/kinematics.hpp"
 #include "ord/math.hpp"
 #include "ord/tire.hpp"
 
@@ -32,6 +33,13 @@ struct SuspensionDef {
     Real reboundDampingFast = 0.0; // N*s/m
     Real damperKneeSpeed = 0.1;    // m/s
     Real bumpStopRate = 300000.0;  // N/m beyond full bump
+    // The linkage that guides the wheel (kinematics.hpp). The default slider
+    // travels straight along body z and uses camberGain / staticToe as
+    // constants; a double wishbone or MacPherson strut derives the camber and
+    // toe curves, the wheel's path (roll centre, anti-dive) and the spring's
+    // motion ratio from its geometry. springRate stays the wheel rate at the
+    // design position; the motion ratio makes it rise or fall through the travel.
+    LinkageDef linkage;
 };
 
 struct WheelDef {

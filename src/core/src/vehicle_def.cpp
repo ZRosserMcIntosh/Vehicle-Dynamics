@@ -70,6 +70,15 @@ std::string VehicleDefinition::validate() const {
         if (!inRange(w.staticCamber, -0.3, 0.2)) return id + "staticCamber must be within -0.3..0.2 rad";
         if (!inRange(w.camberGain, -5, 5)) return id + "camberGain must be within -5..5 rad/m";
         if (!inRange(w.casterAngle, -0.2, 0.4)) return id + "casterAngle must be within -0.2..0.4 rad";
+        if (sd.linkage.type != LinkageType::Slider) {
+            const LinkageDef& l = sd.linkage;
+            for (const Vec3* p : {&l.lowerPivotFront, &l.lowerPivotRear, &l.lowerBallJoint, &l.upperPivotFront,
+                                  &l.upperPivotRear, &l.upperBallJoint, &l.strutTop, &l.tieRodInner, &l.tieRodOuter,
+                                  &l.springBody, &l.springArm})
+                if (!inRange(p->x, -3, 3) || !inRange(p->y, -3, 3) || !inRange(p->z, -3, 3))
+                    return id + "linkage points must be finite and within 3 m of the wheel centre";
+            if (!inRange(l.rideOffset, -1, 1)) return id + "linkage rideOffset must be within -1..1 m";
+        }
         if (!inRange(sd.bumpDampingFast, 0, 1e6) || !inRange(sd.reboundDampingFast, 0, 1e6))
             return id + "fast damping must be within 0..1e6 N*s/m";
         if (!inRange(sd.damperKneeSpeed, 0.001, 10)) return id + "damperKneeSpeed must be within 0.001..10 m/s";

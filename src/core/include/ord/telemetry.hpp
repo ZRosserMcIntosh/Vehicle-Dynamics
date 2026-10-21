@@ -1,7 +1,11 @@
 // OpenRoad Dynamics — engine-independent vehicle physics core.
 // SPDX-License-Identifier: MIT
 //
-// Per-step telemetry. Every physical quantity the benchmarks assert on is
+// Per-step telemetry. Time levels: position, velocities, attitude and the
+// accelerations are the state at the END of the step; wheel loads, slips,
+// forces, compressions and the assists' commands are the ones that acted
+// DURING it (and produced that state).
+// Every physical quantity the benchmarks assert on is
 // exported here so tests, tools and the Unreal debug overlay share one source.
 // Channel definitions: docs/benchmarks/telemetry-channels.md
 #pragma once
@@ -69,6 +73,9 @@ struct TelemetryFrame {
     std::uint64_t groundQueries = 0;  // cumulative GroundQuery calls by this vehicle
     std::size_t wheelCount = 0;
     std::array<WheelTelemetry, kMaxWheels> wheels{};
+    // Front-view roll-centre height above the ground per axle, from the
+    // linkage's path and camber rate at the current travel (0 = at the ground).
+    std::array<Real, kMaxAxles> rollCentreHeight{};
 };
 
 void writeCsvHeader(std::ostream& os, std::size_t wheelCount);
