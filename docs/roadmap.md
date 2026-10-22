@@ -61,7 +61,7 @@ Prioritised by "what unlocks measurable driving quality soonest". Each item has 
 ## M3 — Tire depth
 
 1. Camber thrust (done; camber peak-grip model in the garage); full MF 6.x coefficient support (`.tir`-style import, our own parameter sets only).
-2. Wet model: water-film depth input, speed-dependent μ, hydroplaning onset (B21).
+2. Wet model: water-film depth input, speed-dependent μ, hydroplaning onset (B21). *Done (first step):* standing water with Horne's hydroplaning speed, tread depth, displacement drag and spin-down ([water.md](architecture/water.md)); a measured partial-hydroplaning curve and tread-pattern effects remain.
 3. Loose surfaces (gravel/dirt/grass curve shapes, rolling resistance).
 4. Thermal (surface/carcass), pressure and wear. Off by default outside SIMULATION. No refuelling gameplay. *Done (first step):* compounds, pressure and a one-node tread temperature in the tuning garage ([tuning-garage.md](architecture/tuning-garage.md)); carcass node, wear and pressure rise with heat remain.
 5. Self-aligning torque (MF Mz) → **force feedback** pipeline.
@@ -100,5 +100,5 @@ Bicycles, e-scooters/e-bikes and motorcycles at car-level fidelity. Plan, result
 1. Compile the UE5 plugin on UE 5.4–5.6 and resolve the API assumptions recorded in its audit (M1.1–M1.3)
 2. Build the proving-ground level from the documented steps and drive the first car in Unreal; record headless-vs-Chaos parity (< 1% target on B1/B2/B4/B5) and real ray costs (M1.2, M1.6)
 3. Tire cleat-test calibration to settle the 5- vs 8-sample contact layout sensitivity (~30% on sharp curbs) and add continuous effective-road-profile enveloping (M2.2)
-4. Wet model: water-film depth on strips, speed-dependent grip, aquaplaning (M3.2)
+4. ~~Wet model: water-film depth, speed-dependent grip, aquaplaning (M3.2)~~ first step done ([water.md](architecture/water.md))
 5. Solid axles, bushing compliance and tilted contact samples on top of the linkage kinematics (M2.3)
