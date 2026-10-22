@@ -11,6 +11,7 @@
 #include <vector>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "ord/crash.hpp"
@@ -90,6 +91,104 @@ constexpr Real kSmashLaneY0 = kCrashLaneY + 28.0, kSmashLaneSpacing = 10.0;
 constexpr double kBreakEnergy[3] = {1500.0, 25000.0, 120000.0};
 Real smashLaneY(int k) { return kSmashLaneY0 + kSmashLaneSpacing * k; }
 
+// ---- Test areas south of the rollover area (flat run-ups from x = -470) ----
+// Moose test (ISO 3888-2 double lane change): the cones are the page's; the lane is flat asphalt.
+constexpr Real kMooseY = -150.0;
+// Aquaplaning lane: an 8 mm water pool across the lane, then a 12 mm puddle under the left
+// wheels only (the pull toward the water). Surfaces lane: Sao Paulo cobblestones (paralelepipedo)
+// and painted stripes, both much slicker than asphalt when wet.
+constexpr Real kAquaY = -180.0, kAquaPoolX0 = -330.0, kAquaPoolX1 = -280.0, kAquaPuddleX0 = -220.0, kAquaPuddleX1 = -200.0;
+constexpr Real kSurfY = -210.0, kCobbleX0 = -430.0, kCobbleX1 = -330.0, kPaintX0 = -300.0, kPaintX1 = -260.0;
+
+// ---- Stunt park, north of the smash lanes ----
+// Two kicker ramps and their landing ramps (a 1.5 m kicker with an 18 m gap, a 3 m kicker with
+// a 28 m gap), a half-pipe along x, and a loop. The loop is not a height field: it is a ribbon
+// on the inside of a general cylinder (axis along y) whose profile in the x-z plane widens at
+// the bottom and tightens at the top, like real stunt loops: the radius of curvature runs from
+// kLoopRb at the bottom to kLoopRt at the top, rho(theta) = Rb + (Rt - Rb)(1 - cos theta)/2
+// with theta the slope angle. A circular loop needs at least 6 g at its bottom to make it over
+// the top (v^2 = 5 g R there); this one needs ~4 g. The ribbon shifts kLoopShift sideways over
+// its length so the way in and the way out do not meet: a car that drives in straight at
+// kLoopHeading follows it (on a cylinder, unrolled flat, that path is a straight line).
+constexpr Real kJumpY[2] = {212.0, 226.0};
+constexpr Real kKickX0[2] = {-340.0, -314.0}, kKickLen[2] = {10.0, 14.0}, kKickH[2] = {1.5, 3.0};
+constexpr Real kLandX0[2] = {-312.0, -272.0}, kLandLen[2] = {40.0, 60.0};
+constexpr Real kPipeY = 262.0, kPipeX0 = -440.0, kPipeX1 = -240.0, kPipeFloor = 4.0, kPipeR = 9.0, kPipeDeck = 3.0;
+constexpr Real kPipeMaxAngle = 50.0 * kPi / 180.0;  // walls steepen to 50 degrees (a stalled car tips past ~55), then a deck
+constexpr Real kLoopX = -250.0, kLoopY = 300.0, kLoopRb = 22.0, kLoopRt = 9.0, kLoopShift = 9.0, kLoopHalfWidth = 2.0;
+constexpr Real kLoopClothoid = 30.0;  // m of entry (and exit) over which the curvature ramps up from 0
+constexpr Real kLoopR = kLoopRb;      // reported to the page (bottom radius)
+
+// The loop's profile, tabulated once by integrating its curvature along the arc: a clothoid
+// lead-in (curvature rising linearly to 1/Rb, so the load comes on over ~1 s instead of as a
+// step that would bounce the car off its bump stops), the loop proper with
+// rho(theta) = Rb + (Rt - Rb)(1 - cos theta)/2, and a mirror-image lead-out.
+// Samples: x (relative to kLoopX), z, slope angle, arc length.
+struct LoopProfile {
+    std::vector<double> p;
+    int n = 0;          // samples
+    double length = 0;  // total arc length
+    double xMin = 0, xMax = 0, zMax = 0;
+    static constexpr double kCell = 1.0;
+    int nx = 0, nz = 0;
+    std::vector<std::vector<int>> grid;  // segments per 1 m cell
+    LoopProfile() {
+        const double kb = 1 / kLoopRb, thc = 0.5 * kb * kLoopClothoid;  // angle turned by a clothoid
+        auto rho = [](double th) { return kLoopRb + (kLoopRt - kLoopRb) * 0.5 * (1 - std::cos(th)); };
+        double x = 0, z = 0, th = 0, sArc = 0;
+        constexpr double ds = 0.05;
+        auto push = [&] { p.insert(p.end(), {x, z, th, sArc}); xMin = std::min(xMin, x); xMax = std::max(xMax, x); zMax = std::max(zMax, z); };
+        auto advance = [&](double k) {
+            const double tm = th + 0.5 * k * ds;
+            x += ds * std::cos(tm); z += ds * std::sin(tm); th += k * ds; sArc += ds;
+            push();
+        };
+        push();
+        while (sArc < kLoopClothoid) advance(kb * sArc / kLoopClothoid);
+        // loop proper: rho runs over the angle mapped onto 0..2 pi, so it is Rb where the clothoids
+        // hand over and Rt at the top
+        const double span = 2 * kPi - 2 * thc;
+        while (th < 2 * kPi - thc) advance(1 / rho(2 * kPi * (th - thc) / span));
+        const double kEnd = 1 / kLoopRb, s0 = sArc;
+        while (sArc - s0 < kLoopClothoid) advance(kEnd * (1 - (sArc - s0) / kLoopClothoid));
+        n = static_cast<int>(p.size() / 4);
+        length = sArc;
+        nx = static_cast<int>((xMax - xMin) / kCell) + 3; nz = static_cast<int>(zMax / kCell) + 3;
+        grid.assign(static_cast<std::size_t>(nx) * nz, {});
+        for (int i = 0; i + 1 < n; ++i) {
+            const double x0 = std::min(p[4 * i], p[4 * i + 4]), x1 = std::max(p[4 * i], p[4 * i + 4]);
+            const double z0 = std::min(p[4 * i + 1], p[4 * i + 5]), z1 = std::max(p[4 * i + 1], p[4 * i + 5]);
+            for (int j = cz(z0); j <= cz(z1); ++j)
+                for (int k = cx(x0); k <= cx(x1); ++k) grid[static_cast<std::size_t>(j) * nx + k].push_back(i);
+        }
+    }
+    int cx(double x) const { return std::clamp(static_cast<int>((x - xMin) / kCell) + 1, 0, nx - 1); }
+    int cz(double z) const { return std::clamp(static_cast<int>(z / kCell) + 1, 0, nz - 1); }
+};
+const LoopProfile& loopProfile() { static const LoopProfile lp; return lp; }
+Real loopHeading() { return std::atan(kLoopShift / loopProfile().length); }
+constexpr Real kStuntX0 = -470.0, kStuntX1 = -150.0, kStuntY0 = 202.0, kStuntY1 = 340.0;
+
+Real stuntHeight(Real x, Real y) {
+    for (int k = 0; k < 2; ++k) {
+        if (std::abs(y - kJumpY[k]) > 2.5) continue;
+        // kicker: a curved run-in over its first half, then straight to the lip, so the car leaves
+        // without the pitch rate a curve at the lip would give it (that flips cars in the air)
+        const Real u = x - kKickX0[k], a = 0.5 * kKickLen[k], slope = kKickH[k] / (kKickLen[k] - 0.5 * a);
+        if (u >= 0 && u < a) return slope * u * u / (2 * a);
+        if (u >= a && u < kKickLen[k]) return slope * (0.5 * a + (u - a));
+        const Real s = (x - kLandX0[k]) / kLandLen[k];
+        if (s >= 0 && s < 1) return kKickH[k] * 0.5 * (1 + std::cos(kPi * s));  // landing: eases out
+    }
+    if (x > kPipeX0 && x < kPipeX1) {
+        const Real u = std::abs(y - kPipeY) - kPipeFloor;
+        const Real uMax = kPipeR * std::sin(kPipeMaxAngle);
+        if (u > 0 && u <= uMax) return kPipeR - std::sqrt(kPipeR * kPipeR - u * u);
+        if (u > uMax && u < uMax + kPipeDeck) return kPipeR - std::sqrt(kPipeR * kPipeR - uMax * uMax);
+    }
+    return 0.0;
+}
+
 Real cosBump(Real x, Real c, Real len, Real h) {
     const Real d = std::abs(x - c);
     return d < 0.5 * len ? h * 0.5 * (1 + std::cos(2 * kPi * d / len)) : 0.0;
@@ -136,7 +235,30 @@ Real provingGroundHeight(Real x, Real y) {
     if (y > kRollRampLaneY && y < kRollRampLaneY + 5 && x > kRollRampX0 && x < kRollRampX1) return rolloverHeight(x, y);
     if (y > kBumpLaneY - 4 && y < kBumpLaneY + 4 && x > 40 && x < 300) return bumpLaneHeight(x, y);
     if (y > kPgBumpY - 4 && y < kPgBumpY + 4 && x > kPgX0 && x < kPgX1) return provingBumpHeight(x, y);
+    if (y > kStuntY0 && y < kStuntY1 && x > kStuntX0 && x < kStuntX1) return stuntHeight(x, y);
     return 0.0;
+}
+
+SurfaceProperties cobbleSurface() {
+    SurfaceProperties s;
+    s.frictionScale = 0.85;  // polished granite setts
+    s.roughness = 1.0;
+    s.textureAmplitude = 0.012;
+    s.textureWavelength = 0.14;
+    s.textureVariation = 0.6;
+    return s;
+}
+SurfaceProperties paintSurface() {
+    SurfaceProperties s;
+    s.frictionScale = 0.9;
+    return s;
+}
+SurfaceProperties waterSurface(Real depth) {
+    SurfaceProperties s;
+    s.frictionScale = 0.75;
+    s.wetness = 1.0;
+    s.waterDepth = depth;
+    return s;
 }
 
 SurfaceProperties wetSurface() {
@@ -202,6 +324,150 @@ struct HeightfieldGround final : GroundQuery {
     }
 };
 
+// ---- The ground the demo hands the core: the world's ground, plus the stunt park's loop and a
+// robust march for its steep faces, plus the weather. ----
+std::uint64_t mixHash(std::uint64_t h) {
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33;
+    return h;
+}
+// Rain puddles: one candidate per 22 m cell, about 30 % of cells, 1.2-3.5 m across, 6-20 mm deep.
+struct Puddle { double x, y, r, depth; };
+constexpr double kPuddleCell = 22.0;
+bool puddleInCell(long i, long j, Puddle& p) {
+    const std::uint64_t h = mixHash((static_cast<std::uint64_t>(i) * 0x9E3779B97F4A7C15ULL) ^ static_cast<std::uint64_t>(j) ^ 0x5bd1e995ULL);
+    if ((h & 1023) > 300) return false;
+    const double u1 = static_cast<double>((h >> 10) & 1023) / 1023, u2 = static_cast<double>((h >> 20) & 1023) / 1023;
+    const double u3 = static_cast<double>((h >> 30) & 1023) / 1023, u4 = static_cast<double>((h >> 40) & 1023) / 1023;
+    p = {(i + 0.15 + 0.7 * u1) * kPuddleCell, (j + 0.15 + 0.7 * u2) * kPuddleCell, 0.6 + 1.15 * u3, 0.006 + 0.014 * u4};
+    return true;
+}
+
+class DemoGround final : public GroundQuery {
+public:
+    explicit DemoGround(std::unique_ptr<GroundQuery> inner, bool track) : inner_(std::move(inner)), track_(track) {}
+    double rain = 0;  // 0 dry .. 1 downpour
+    // Where puddles may form (the city: road classes only).
+    std::function<bool(double, double)> puddleAllowed;
+
+    GroundHit raycast(const Vec3& o, const Vec3& d, Real maxDistance) const override {
+        GroundHit h;
+        const bool stunt = track_ && o.x > kStuntX0 - 5 && o.x < kStuntX1 + 5 && o.y > kStuntY0 - 5 && o.y < kStuntY1 + 5;
+        if (stunt) {
+            h = march(o, d, maxDistance);
+            const GroundHit l = loop(o, d, maxDistance);
+            if (l.hit && (!h.hit || l.distance < h.distance)) h = l;
+        } else {
+            h = inner_->raycast(o, d, maxDistance);
+        }
+        if (h.hit) weather(h);
+        return h;
+    }
+    // Puddle depth at a point (0 = none), rain included.
+    double puddleDepth(double x, double y) const {
+        if (rain <= 0) return 0;
+        const long i0 = static_cast<long>(std::floor(x / kPuddleCell)), j0 = static_cast<long>(std::floor(y / kPuddleCell));
+        Puddle p;
+        if (!puddleInCell(i0, j0, p)) return 0;
+        const double dx = (x - p.x) / p.r, dy = (y - p.y) / (0.6 * p.r), q = dx * dx + dy * dy;
+        if (q >= 1) return 0;
+        if (puddleAllowed && !puddleAllowed(p.x, p.y)) return 0;
+        return p.depth * std::min(1.0, 0.25 + rain) * (1 - q * q);
+    }
+    TestTrackGround* track() const { return track_ ? static_cast<TestTrackGround*>(inner_.get()) : nullptr; }
+
+private:
+    std::unique_ptr<GroundQuery> inner_;
+    bool track_;
+
+    void weather(GroundHit& h) const {
+        SurfaceProperties& s = h.surface;
+        const int id = h.surfaceId;
+        if (rain > 0) {
+            if (id == 4) s.frictionScale *= 1 - 0.45 * rain;        // wet setts: ~0.45 of dry asphalt
+            else if (id == 5) s.frictionScale *= 1 - 0.55 * rain;   // wet paint: ~0.4
+            else if (id == 13) { s.frictionScale *= 1 - 0.3 * rain; s.looseness = std::max(s.looseness, 0.6 * rain); }  // mud
+            else if (id != 2 && id != 6 && id != 7) s.frictionScale *= 1 - 0.25 * rain;  // wet asphalt / paving
+            s.wetness = std::max(s.wetness, rain);
+            s.waterDepth = std::max(s.waterDepth, 0.0012 * rain);  // the film in a downpour
+            if (id != 2 && id != 6 && id != 7) {
+                const double pd = puddleDepth(h.point.x, h.point.y);
+                if (pd > 0) { s.waterDepth = std::max(s.waterDepth, pd); h.surfaceId = 8; }
+            }
+        }
+    }
+
+    // March a height-field ray in steps no longer than a quarter of the height gap (safe on
+    // slopes up to ~75 deg, where a fixed-point solve diverges), then bisect the crossing.
+    GroundHit march(const Vec3& o, const Vec3& d, Real maxDistance) const {
+        GroundHit h;
+        auto f = [&](double t) { const Vec3 p = o + d * t; return p.z - provingGroundHeight(p.x, p.y); };
+        double t0 = 0, f0 = f(0);
+        if (f0 < 0) return h;
+        double t1 = 0, f1 = f0;
+        while (true) {
+            t1 = t0 + std::max(0.02, 0.25 * f0);
+            if (t1 > maxDistance) { t1 = maxDistance; f1 = f(t1); if (f1 > 0) return h; break; }
+            f1 = f(t1);
+            if (f1 <= 0) break;
+            t0 = t1; f0 = f1;
+        }
+        for (int k = 0; k < 14; ++k) {
+            const double tm = 0.5 * (t0 + t1), fm = f(tm);
+            if (fm > 0) { t0 = tm; f0 = fm; } else { t1 = tm; f1 = fm; }
+        }
+        h.hit = true;
+        h.distance = t1;
+        h.point = o + d * t1;
+        constexpr double e = 0.01;
+        const double dx = (provingGroundHeight(h.point.x + e, h.point.y) - provingGroundHeight(h.point.x - e, h.point.y)) / (2 * e);
+        const double dy = (provingGroundHeight(h.point.x, h.point.y + e) - provingGroundHeight(h.point.x, h.point.y - e)) / (2 * e);
+        h.normal = normalized(Vec3{-dx, -dy, 1});
+        h.surfaceId = 0;
+        return h;
+    }
+
+    // The loop ribbon (LoopProfile): 2-D ray against the profile's segments in the x-z plane near
+    // the ray, then the lane test in y at that point's arc length. Only hits from the inside count.
+    GroundHit loop(const Vec3& o, const Vec3& d, Real maxDistance) const {
+        GroundHit h;
+        const LoopProfile& L = loopProfile();
+        const double ox = o.x - kLoopX, oz = o.z;
+        if (ox < L.xMin - 4 || ox > L.xMax + 4 || oz > L.zMax + 4 || o.y < kLoopY - 4 || o.y > kLoopY + kLoopShift + 4) return h;
+        const double ex = ox + d.x * maxDistance, ez = oz + d.z * maxDistance;
+        double best = maxDistance + 1;
+        int bestSeg = -1; double bestU = 0;
+        const int i0 = L.cx(std::min(ox, ex)), i1 = L.cx(std::max(ox, ex)), j0 = L.cz(std::min(oz, ez)), j1 = L.cz(std::max(oz, ez));
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i)
+                for (int sg : L.grid[static_cast<std::size_t>(j) * L.nx + i]) {
+                    const double ax = L.p[4 * sg], az = L.p[4 * sg + 1], bx = L.p[4 * sg + 4], bz = L.p[4 * sg + 5];
+                    const double sx = bx - ax, sz = bz - az;
+                    const double den = d.x * sz - d.z * sx;
+                    if (std::abs(den) < 1e-12) continue;
+                    // o + d t = a + s u
+                    const double t = ((ax - ox) * sz - (az - oz) * sx) / den;
+                    const double u = ((ax - ox) * d.z - (az - oz) * d.x) / den;
+                    if (t < 0 || t > maxDistance || u < 0 || u > 1 || t >= best) continue;
+                    // inward normal (-sin th, cos th): the ray must arrive from the inside
+                    const double th = L.p[4 * sg + 2] + u * (L.p[4 * sg + 6] - L.p[4 * sg + 2]);
+                    if (-std::sin(th) * d.x + std::cos(th) * d.z >= 0) continue;
+                    const double sArc = L.p[4 * sg + 3] + u * (L.p[4 * sg + 7] - L.p[4 * sg + 3]);
+                    const double py = o.y + d.y * t;
+                    if (std::abs(py - (kLoopY + kLoopShift * sArc / L.length)) > kLoopHalfWidth) continue;
+                    if (az + u * sz < 0.02) continue;  // where the profile meets the road, the road wins
+                    best = t; bestSeg = sg; bestU = u;
+                }
+        if (bestSeg < 0) return h;
+        const double th = L.p[4 * bestSeg + 2] + bestU * (L.p[4 * bestSeg + 6] - L.p[4 * bestSeg + 2]);
+        h.hit = true;
+        h.distance = best;
+        h.point = o + d * best;
+        h.normal = Vec3{-std::sin(th), 0, std::cos(th)};
+        h.surfaceId = 9;
+        return h;
+    }
+};
+
 struct Colliders {
     // A wall segment. material 0 is rigid; 1 glass, 2 hollow block, 3 brick break once a hit
     // carries more energy than what is left of breakEnergy (hits that fall short crack it:
@@ -227,6 +493,7 @@ struct Colliders {
 
 struct Sim {
     std::unique_ptr<GroundQuery> ground;
+    DemoGround* demo = nullptr;
     TestTrackGround* track = nullptr;
     HeightfieldGround* city = nullptr;
     int world = 0;
@@ -234,6 +501,15 @@ struct Sim {
     double impact = 0;  // largest collision speed change since the last publish (m/s)
     struct BreakEvent { int seg, material; double px, py, nx, ny, speed, kept; };
     std::vector<BreakEvent> breaks;  // walls broken since the page last asked
+    // Every hit harder than 1 m/s since the page last asked (for its crumple): contact point, wall
+    // normal (pointing at the car), closing speed, kind (0 wall, 1 post or tree, 2 breakable wall
+    // that broke).
+    struct HitEvent { double px, py, pz, nx, ny, speed; int kind; };
+    std::vector<HitEvent> hits;
+    // The "shadow" car: a second car driven by the same inputs, with another setup or another
+    // model, that collides with nothing (see ord_shadow_start).
+    std::unique_ptr<Vehicle> shadow;
+    double rain = 0;
     std::unique_ptr<Vehicle> vehicle;
     DriverInput input;
     AssistConfig assists;
@@ -270,6 +546,17 @@ struct Sim {
 
 Sim g;
 constexpr Real kStep = 1.0 / 360.0;
+// Rewind: snapshots of everything a step changes, newest last (see ord_snap_push).
+struct Snapshot {
+    std::optional<Vehicle> vehicle, shadow;
+    OccupantSim occupant[2];
+    Real accumulator = 0;
+    DriverInput input;
+    std::vector<std::pair<double, bool>> walls;  // damage, broken per segment
+};
+constexpr int kSnapCapacity = 240;
+std::vector<std::unique_ptr<Snapshot>> g_snaps;  // ring
+int g_snapHead = 0, g_snapCount = 0;
 // Frame state exported to JavaScript (see web/README.md for the layout).
 constexpr int kHeader = 39, kPerWheel = 17;
 std::array<double, kHeader + kPerWheel * kMaxWheels> g_out{};
@@ -295,7 +582,12 @@ void ensureGround() {
     if (g.world == 1) {
         auto c = std::make_unique<HeightfieldGround>();
         g.city = c.get(); g.track = nullptr;
-        g.ground = std::move(c);
+        auto d = std::make_unique<DemoGround>(std::move(c), false);
+        HeightfieldGround* city = g.city;
+        d->puddleAllowed = [city](double x, double y) { return city->classAt(x, y) <= 1; };
+        d->rain = g.rain;
+        g.demo = d.get();
+        g.ground = std::move(d);
         return;
     }
     auto t = std::make_unique<TestTrackGround>(provingGroundHeight);
@@ -305,6 +597,12 @@ void ensureGround() {
     t->addPatch({kPgX0, kPgX1, kPgBumpY - 4, kPgBumpY + 4, bumpSurface(), 3});
     t->addPatch({-200, -140, 25, 85, wetSurface(), 2});               // wet skidpad square
     t->addPatch({kPgX0, kPgX1, kPgSplitY, kPgSplitY + 5, wetSurface(), 2});  // split-mu: left half wet
+    // aquaplaning lane: a pool across the lane, then a puddle under the left wheels
+    t->addPatch({kAquaPoolX0, kAquaPoolX1, kAquaY - 4, kAquaY + 4, waterSurface(0.008), 6});
+    t->addPatch({kAquaPuddleX0, kAquaPuddleX1, kAquaY, kAquaY + 3, waterSurface(0.012), 7});
+    // surfaces lane: cobblestones, then painted stripes 0.5 m wide every metre (a zebra crossing)
+    t->addPatch({kCobbleX0, kCobbleX1, kSurfY - 4, kSurfY + 4, cobbleSurface(), 4});
+    for (Real x = kPaintX0; x < kPaintX1; x += 1.0) t->addPatch({x, x + 0.5, kSurfY - 4, kSurfY + 4, paintSurface(), 5});
     g.track = t.get(); g.city = nullptr;
     // Crash-test lane: a rigid concrete barrier across the lane at its east
     // end (frontal tests) and a 30 cm pole beside it (side-impact pole test).
@@ -319,10 +617,25 @@ void ensureGround() {
             g.col.segs.push_back(s);
         }
     }
+    // the half-pipe's parapets along the back of each deck: climb out and you hit concrete
+    {
+        const double uMax = kPipeR * std::sin(kPipeMaxAngle), top = kPipeR * (1 - std::cos(kPipeMaxAngle));
+        for (double side : {1.0, -1.0}) {
+            const double y = kPipeY + side * (kPipeFloor + uMax + kPipeDeck);
+            g.col.segs.push_back({kPipeX0, y, kPipeX1, y, top - 0.5, top + 1.1});
+        }
+    }
+    // the landing ramps' front faces: undershoot a jump and you hit a wall
+    for (int k = 0; k < 2; ++k)
+        g.col.segs.push_back({kLandX0[k], kJumpY[k] - 2.5, kLandX0[k], kJumpY[k] + 2.5, -1.0, kKickH[k] - 0.05});
     g.breaks.reserve(16);
-    g.col.gx0 = -300; g.col.gy0 = -300; g.col.gcell = 8; g.col.gn = 75;
+    g.hits.reserve(16);
+    g.col.gx0 = -500; g.col.gy0 = -300; g.col.gcell = 8; g.col.gn = 100;
     g.col.build();
-    g.ground = std::move(t);
+    auto d = std::make_unique<DemoGround>(std::move(t), true);
+    d->rain = g.rain;
+    g.demo = d.get();
+    g.ground = std::move(d);
 }
 
 double groundHeight(double x, double y) { return g.city ? g.city->heightAt(x, y) : provingGroundHeight(x, y); }
@@ -429,6 +742,7 @@ void resolveCollisions() {
                     b.angularVelocity = b.angularVelocity + invI * cross(r, jv);
                     s.broken = true;
                     if (g.breaks.size() < 16) g.breaks.push_back({bestSeg, s.material, cp.x, cp.y, nx, ny, -vn, rest / std::max(kin, 1e-9)});
+                    if (g.hits.size() < 16) g.hits.push_back({cp.x, cp.y, cp.z, nx, ny, -vn, 2});
                     g.impact = std::max(g.impact, vnAfter - vn);
                     changed = true;
                     continue;  // no push-out; the broken section no longer collides
@@ -452,6 +766,7 @@ void resolveCollisions() {
             b.velocity = b.velocity + jv * (1 / m);
             b.angularVelocity = b.angularVelocity + invI * cross(r, jv);
             g.impact = std::max(g.impact, -vn);
+            if (vn < -1 && g.hits.size() < 16) g.hits.push_back({cp.x, cp.y, cp.z, nx, ny, -vn, bestSeg >= 0 ? 0 : 1});
         }
         changed = true;
     }
@@ -463,12 +778,10 @@ void resolveCollisions() {
     }
 }
 
-void publish() {
-    const Vehicle& v = *g.vehicle;
+void publishVehicle(const Vehicle& v, double* o) {
     const RigidBodyState& b = v.state();
     const TelemetryFrame& t = v.telemetry();
     const VehicleDefinition& d = v.definition();
-    double* o = g_out.data();
     o[0] = b.position.x; o[1] = b.position.y; o[2] = b.position.z;
     o[3] = b.orientation.w; o[4] = b.orientation.x; o[5] = b.orientation.y; o[6] = b.orientation.z;
     o[7] = t.speed; o[8] = t.lateralVelocity; o[9] = t.yawRate; o[10] = t.sideslip;
@@ -478,7 +791,7 @@ void publish() {
     o[21] = t.time; o[22] = static_cast<double>(t.wheelCount); o[23] = v.faulted() ? 1 : 0;
     o[24] = t.assists.shifting ? 1 : 0; o[25] = d.wheels.empty() ? 0 : d.wheels[0].tire.radius;
     o[26] = t.clutchEngagement; o[27] = t.steerInput; o[28] = t.throttleInput; o[29] = t.brakeInput;
-    o[30] = static_cast<double>(t.groundQueries); o[31] = g.impact; g.impact = 0;
+    o[30] = static_cast<double>(t.groundQueries); o[31] = 0;
     o[32] = t.assists.driftActive ? 1 : 0; o[33] = t.assists.driftTargetSideslip;
     o[34] = t.assists.driftThrottleCut; o[35] = t.assists.driftSteerAngle;
     o[36] = t.upright; o[37] = static_cast<double>(t.bodyContacts); o[38] = t.bodyContactForce;
@@ -494,6 +807,17 @@ void publish() {
         p[13] = t.assists.absActive[w] ? 1 : 0; p[14] = t.assists.escBrakeTorque[w]; p[15] = wt.surfaceId;
         p[16] = wt.gripUsed;
     }
+}
+
+void publish() {
+    publishVehicle(*g.vehicle, g_out.data());
+    g_out[31] = g.impact; g.impact = 0;
+}
+
+std::array<double, kHeader + kPerWheel * kMaxWheels> g_shadowOut{};
+void publishShadow() {
+    if (g.shadow) publishVehicle(*g.shadow, g_shadowOut.data());
+    else g_shadowOut.fill(0);
 }
 
 }  // namespace
@@ -638,6 +962,8 @@ void publishBike() {
 ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
     ensureGround();
     g.carIndex = carIndex;
+    g.shadow.reset();
+    g_snapCount = 0;
     g.vehicle = std::make_unique<Vehicle>(currentDef(), g.assists);
     if (!g.vehicle->isValid()) return 0;
     applyTuning();
@@ -655,11 +981,13 @@ ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
 ORD_EXPORT void ord_reset_obstacles() {
     for (auto& s : g.col.segs) { s.broken = false; s.damage = 0; }
     g.breaks.clear();
+    g.hits.clear();
 }
 
 ORD_EXPORT void ord_reset(double x, double y, double yaw) {
     if (!g.vehicle) return;
     ord_reset_obstacles();
+    g.shadow.reset();
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
     if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
     g.accumulator = 0;
@@ -702,28 +1030,45 @@ ORD_EXPORT void ord_set_input(double steer, double throttle, double brake, doubl
 }
 
 // Advances real time `dt` (s) in fixed 1/360 s steps. Returns the number of steps taken.
+namespace {
+void stepOnce() {
+    g.vehicle->step(kStep, g.input, *g.ground);
+    if (g.shadow && !g.shadow->faulted()) g.shadow->step(kStep, g.input, *g.ground);
+    // driving acceleration seen by the occupants (before any collision
+    // impulse; a hit reaches them as a crush pulse instead)
+    Vec3 acc = g.vehicle->telemetry().accelBody;
+    const double am = length(acc), cap = 40 * 9.81;
+    if (am > cap) acc = acc * (cap / am);
+    resolveCollisions();
+    if (length(g.pendingDeltaV) > 0.5)
+        for (auto& o : g.occupant) o.impact(g.pendingDeltaV);
+    g.pendingDeltaV = {};
+    for (auto& o : g.occupant) o.step(kStep, acc);
+    g.input.shiftUp = g.input.shiftDown = false;
+}
+}  // namespace
+
 ORD_EXPORT int ord_advance(double dt) {
     if (!g.vehicle || g.vehicle->faulted()) return 0;
     g.accumulator += std::min(dt, 0.1);  // never try to catch up more than 100 ms
     int n = 0;
     while (g.accumulator >= kStep) {
-        g.vehicle->step(kStep, g.input, *g.ground);
-        // driving acceleration seen by the occupants (before any collision
-        // impulse; a hit reaches them as a crush pulse instead)
-        Vec3 acc = g.vehicle->telemetry().accelBody;
-        const double am = length(acc), cap = 40 * 9.81;
-        if (am > cap) acc = acc * (cap / am);
-        resolveCollisions();
-        if (length(g.pendingDeltaV) > 0.5)
-            for (auto& o : g.occupant) o.impact(g.pendingDeltaV);
-        g.pendingDeltaV = {};
-        for (auto& o : g.occupant) o.step(kStep, acc);
-        g.input.shiftUp = g.input.shiftDown = false;
+        stepOnce();
         g.accumulator -= kStep;
         ++n;
+        if (g.vehicle->faulted()) break;
     }
     publish();
     return n;
+}
+
+// Exactly n fixed steps, whatever the frame time (the crash lab samples every step).
+ORD_EXPORT int ord_step(int n) {
+    if (!g.vehicle) return 0;
+    int k = 0;
+    for (; k < n && !g.vehicle->faulted(); ++k) stepOnce();
+    publish();
+    return k;
 }
 
 ORD_EXPORT double* ord_state() { return g_out.data(); }
@@ -735,7 +1080,7 @@ ORD_EXPORT double ord_ground_height(double x, double y) { return groundHeight(x,
 // 0 = test track (default), 1 = city heightfield. Call before ord_create; recreates the ground.
 ORD_EXPORT void ord_set_world(int w) {
     g.world = w == 1 ? 1 : 0;
-    g.vehicle.reset(); g.ground.reset(); g.city = nullptr; g.track = nullptr;
+    g.vehicle.reset(); g.shadow.reset(); g.ground.reset(); g.demo = nullptr; g.city = nullptr; g.track = nullptr;
     g.col.segs.clear(); g.col.circs.clear(); g.col.build();
     ensureGround();
 }
@@ -993,3 +1338,173 @@ ORD_EXPORT double ord_roll_kerb_y() { return kRollKerbY; }
 ORD_EXPORT double ord_roll_ramp_lane_y() { return kRollRampLaneY; }
 ORD_EXPORT double ord_crash_barrier_x() { return kCrashBarrierX; }
 ORD_EXPORT double ord_crash_pole_x() { return kCrashPoleX; }
+
+// ---- weather ----
+// Rain 0 (dry) .. 1 (downpour): wet asphalt (~0.75 of dry), a 1.2 mm water film, much slicker
+// cobblestones and paint, muddy soil, and puddles 6-20 mm deep that make a tyre hydroplane
+// (see hydroplaneLift in tire.hpp).
+ORD_EXPORT void ord_set_weather(double rain) {
+    g.rain = rain < 0 ? 0 : rain > 1 ? 1 : rain;
+    if (g.demo) g.demo->rain = g.rain;
+}
+// Puddles within `radius` of (x, y) while it rains: returns the count; ord_puddle_buffer() holds
+// 4 doubles each (x, y, half length along x, depth m); the half width along y is 0.6 of the length.
+namespace { std::array<double, 4 * 256> g_puddles{}; }
+ORD_EXPORT int ord_puddles(double x, double y, double radius) {
+    if (!g.demo || g.rain <= 0) return 0;
+    const long i0 = static_cast<long>(std::floor((x - radius) / kPuddleCell)), i1 = static_cast<long>(std::floor((x + radius) / kPuddleCell));
+    const long j0 = static_cast<long>(std::floor((y - radius) / kPuddleCell)), j1 = static_cast<long>(std::floor((y + radius) / kPuddleCell));
+    int n = 0;
+    for (long j = j0; j <= j1; ++j)
+        for (long i = i0; i <= i1 && n < 256; ++i) {
+            Puddle p;
+            if (!puddleInCell(i, j, p)) continue;
+            if (g.demo->puddleDepth(p.x, p.y) <= 0) continue;  // not on a road, or a test patch
+            const GroundHit h = g.ground->raycast({p.x, p.y, groundHeight(p.x, p.y) + 2}, {0, 0, -1}, 5);
+            if (!h.hit || h.surfaceId != 8) continue;
+            double* o = g_puddles.data() + 4 * n++;
+            o[0] = p.x; o[1] = p.y; o[2] = p.r; o[3] = h.surface.waterDepth;
+        }
+    return n;
+}
+ORD_EXPORT double* ord_puddle_buffer() { return g_puddles.data(); }
+
+// ---- test areas: centre-line y (and x ranges) for the page ----
+// 0 moose lane y, 1 aquaplaning lane y, 2 pool x0, 3 pool x1, 4 puddle x0, 5 puddle x1,
+// 6 surfaces lane y, 7 cobbles x0, 8 cobbles x1, 9 paint x0, 10 paint x1,
+// 11/12 jump lanes y, 13/14 kicker x0, 15/16 kicker length, 17/18 kicker height,
+// 19/20 landing x0, 21/22 landing length, 23 half-pipe y, 24 pipe x0, 25 pipe x1, 26 pipe floor
+// half width, 27 pipe radius, 28 pipe deck, 29 loop x, 30 loop y, 31 loop radius, 32 loop shift
+// per turn, 33 loop half width, 34 loop heading (rad).
+namespace { std::array<double, 35> g_areas{}; }
+ORD_EXPORT double* ord_test_areas() {
+    const double a[35] = {kMooseY, kAquaY, kAquaPoolX0, kAquaPoolX1, kAquaPuddleX0, kAquaPuddleX1, kSurfY, kCobbleX0, kCobbleX1,
+                          kPaintX0, kPaintX1, kJumpY[0], kJumpY[1], kKickX0[0], kKickX0[1], kKickLen[0], kKickLen[1], kKickH[0],
+                          kKickH[1], kLandX0[0], kLandX0[1], kLandLen[0], kLandLen[1], kPipeY, kPipeX0, kPipeX1, kPipeFloor, kPipeR,
+                          kPipeDeck, kLoopX, kLoopY, kLoopR, kLoopShift, kLoopHalfWidth, loopHeading()};
+    std::copy(a, a + 35, g_areas.begin());
+    return g_areas.data();
+}
+
+// ---- rewind ----
+// Saves the whole simulation (car, shadow car, dummies, walls, input, step remainder). The page
+// takes one every ~0.1 s and keeps the frame times and inputs in between, so restoring the
+// snapshot and replaying those frames lands exactly on any earlier frame (the step is
+// deterministic). Holds the last kSnapCapacity.
+ORD_EXPORT int ord_snap_push() {
+    if (!g.vehicle) return 0;
+    if (g_snaps.empty()) g_snaps.resize(kSnapCapacity);
+    auto& slot = g_snaps[static_cast<std::size_t>(g_snapHead)];
+    if (!slot) slot = std::make_unique<Snapshot>();
+    Snapshot& s = *slot;
+    s.vehicle = *g.vehicle;
+    if (g.shadow) s.shadow = *g.shadow; else s.shadow.reset();
+    s.occupant[0] = g.occupant[0]; s.occupant[1] = g.occupant[1];
+    s.accumulator = g.accumulator;
+    s.input = g.input;
+    s.walls.resize(g.col.segs.size());
+    for (std::size_t i = 0; i < g.col.segs.size(); ++i) s.walls[i] = {g.col.segs[i].damage, g.col.segs[i].broken};
+    g_snapHead = (g_snapHead + 1) % kSnapCapacity;
+    g_snapCount = std::min(g_snapCount + 1, kSnapCapacity);
+    return g_snapCount;
+}
+ORD_EXPORT int ord_snap_count() { return g_snapCount; }
+// Restores the k-th newest snapshot (0 = newest) and forgets the newer ones. Returns 1 on success.
+ORD_EXPORT int ord_snap_restore(int k) {
+    if (k < 0 || k >= g_snapCount || !g.vehicle) return 0;
+    const int idx = ((g_snapHead - 1 - k) % kSnapCapacity + kSnapCapacity) % kSnapCapacity;
+    const Snapshot& s = *g_snaps[static_cast<std::size_t>(idx)];
+    if (!s.vehicle) return 0;
+    *g.vehicle = *s.vehicle;
+    if (s.shadow) { if (g.shadow) *g.shadow = *s.shadow; else g.shadow = std::make_unique<Vehicle>(*s.shadow); }
+    else g.shadow.reset();
+    g.occupant[0] = s.occupant[0]; g.occupant[1] = s.occupant[1];
+    g.accumulator = s.accumulator;
+    g.input = s.input;
+    for (std::size_t i = 0; i < g.col.segs.size() && i < s.walls.size(); ++i) {
+        g.col.segs[i].damage = s.walls[i].first;
+        g.col.segs[i].broken = s.walls[i].second;
+    }
+    g.pendingDeltaV = {};
+    g.breaks.clear();
+    g.hits.clear();
+    g_snapHead = (idx + 1) % kSnapCapacity;
+    g_snapCount -= k;
+    publish();
+    return 1;
+}
+ORD_EXPORT void ord_snap_clear() { g_snapCount = 0; }
+
+// ---- shadow car ----
+// Starts a second car where the car is now, moving as it moves: carIndex < 0 = the same model;
+// stock = 1 ignores the garage setup (so you drive your setup against the stock car, or one model
+// against another, with the same hands). It takes the same inputs, collides with nothing and
+// does not touch the dummies. Returns 1 on success.
+ORD_EXPORT int ord_shadow_start(int carIndex, int stock) {
+    if (!g.vehicle) return 0;
+    const int idx = carIndex < 0 ? g.carIndex : carIndex;
+    VehicleDefinition d = carByIndex(idx);
+    if (!stock && idx == g.carIndex && g.hasSetup && g.setupCar == g.carIndex) d = applySetup(d, g.setup);
+    auto v = std::make_unique<Vehicle>(d, g.assists);
+    if (!v->isValid()) return 0;
+    const RigidBodyState& b = g.vehicle->state();
+    const Vec3 fwd = b.orientation.rotate({1, 0, 0}), left = b.orientation.rotate({0, 1, 0});
+    const double yaw = std::atan2(fwd.y, fwd.x);
+    v->placeOnGround(b.position.x, b.position.y, yaw, *g.ground, dot(b.velocity, fwd), dot(b.velocity, left), b.angularVelocity.z);
+    v->setWind(g.wind);
+    g.shadow = std::move(v);
+    publishShadow();
+    return 1;
+}
+ORD_EXPORT void ord_shadow_stop() { g.shadow.reset(); }
+ORD_EXPORT double* ord_shadow_state() { publishShadow(); return g_shadowOut.data(); }
+
+// ---- crash lab ----
+// Puts the car at (x, y) heading yaw, already rolling at `speed` (m/s, forward) and sliding at
+// `lateral` (m/s, positive = toward its left), with fresh dummies: a test sled.
+ORD_EXPORT void ord_launch(double x, double y, double yaw, double speed, double lateral) {
+    if (!g.vehicle) return;
+    g.vehicle->placeOnGround(x, y, yaw, *g.ground, speed, lateral, 0);
+    if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
+    setupOccupants();
+    g.accumulator = 0;
+    g.input = {};
+    g.hits.clear();
+    publish();
+}
+// Hits since the last call (see Sim::HitEvent): count; ord_hit_buffer() holds 7 doubles each.
+namespace { std::array<double, 16 * 7> g_hitOut{}; }
+ORD_EXPORT int ord_hit_events() {
+    const int n = static_cast<int>(g.hits.size());
+    for (int i = 0; i < n; ++i) {
+        const auto& e = g.hits[static_cast<std::size_t>(i)];
+        double* o = g_hitOut.data() + 7 * i;
+        o[0] = e.px; o[1] = e.py; o[2] = e.pz; o[3] = e.nx; o[4] = e.ny; o[5] = e.speed; o[6] = e.kind;
+    }
+    g.hits.clear();
+    return n;
+}
+ORD_EXPORT double* ord_hit_buffer() { return g_hitOut.data(); }
+// The crush structure the dummies' pulse comes from: front, rear, side natural frequency (rad/s),
+// front, rear, side crush limit (m), cabin half width (m). The page's crumple uses the same.
+namespace { std::array<double, 7> g_struct{}; }
+ORD_EXPORT double* ord_crash_structure() {
+    const CrashStructure s;
+    double half = 0.7;
+    if (g.vehicle) for (const auto& w : g.vehicle->definition().wheels) half = std::max(half, std::abs(w.suspension.hardpoint.y));
+    g_struct = {s.frontOmega, s.rearOmega, s.sideOmega, s.frontCrush, s.rearCrush, s.sideCrush, half + 0.05};
+    return g_struct.data();
+}
+// Mass properties for the overlay: CoM (body frame, m), mass (kg), inertia (kg m^2).
+namespace { std::array<double, 7> g_info{}; }
+// The loop's profile for drawing: samples of (x relative to the loop's x, z, slope angle,
+// arc length); returns the pointer, ord_loop_profile_count() the sample count.
+ORD_EXPORT double* ord_loop_profile() { return const_cast<double*>(loopProfile().p.data()); }
+ORD_EXPORT int ord_loop_profile_count() { return loopProfile().n; }
+ORD_EXPORT double* ord_vehicle_info() {
+    g_info.fill(0);
+    if (!g.vehicle) return g_info.data();
+    const VehicleDefinition& d = g.vehicle->definition();
+    g_info = {d.centerOfMass.x, d.centerOfMass.y, d.centerOfMass.z, d.mass, d.inertia.x, d.inertia.y, d.inertia.z};
+    return g_info.data();
+}

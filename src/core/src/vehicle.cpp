@@ -127,7 +127,7 @@ Vehicle::Vehicle(const VehicleDefinition& def, const AssistConfig& assists, cons
         const Real front = xf + (b.overhangFront > 0 ? b.overhangFront : 0.9);
         const Real rear = xr - (b.overhangRear > 0 ? b.overhangRear : 0.9);
         const Real hw = b.halfWidth > 0 ? b.halfWidth : yMax + 0.12;
-        const Real floor = b.floorZ != 0 ? b.floorZ : groundZ + 0.13;  // 13 cm ground clearance
+        const Real floor = b.floorZ != 0 ? b.floorZ : groundZ + 0.13 + b.clearanceOffset;  // 13 cm ground clearance stock
         const Real roof = floor + (b.height > 0 ? b.height : 1.15);
         const Real belt = floor + 0.55 * (roof - floor);
         const Real rr = rear + 0.30 * (front - rear), rf = rear + 0.65 * (front - rear);  // roof from 30% to 65% of the length
@@ -626,9 +626,25 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         // not on a point found straight "down" its own axis, which by then lies well off to the
         // side and would prop the car back up. The tyre's support fades out by ~70 degrees and
         // the body hull's sills take over (rollover). 1 in any normal driving.
-        // (measured against the vertical, not the local ground normal: kerb edges have steep
-        // local normals under an upright car)
-        const Real tc = clamp((up.z - 0.34) / 0.26, 0.0, 1.0);
+        // Measured against the vertical (kerb edges have steep local normals under an upright car)
+        // or, on steep ground, against the ground this wheel found, whichever is better aligned:
+        // a car on a banking, a wall or inside a loop is on its wheels, not tipping over.
+        Real align = up.z;
+        {
+            // only ground within the wheel's reach: tilted far over, the ray down the car's own
+            // axis finds ground well off to the side, where the tyre is not
+            const Real reach = wd.suspension.travel + wd.tire.radius + 0.05;
+            Vec3 ns{};
+            for (int k = 0; k < n; ++k) {
+                const Sample& sk = samples[static_cast<std::size_t>(k)];
+                if (sk.hit && !sk.probe && sk.d < reach) ns += sk.normal;
+            }
+            const Real l = length(ns);
+            // on near-level ground the two measures agree; only steep ground (banking, wall, loop)
+            // can make the car's own ground the better reference
+            if (l > 1e-9 && ns.z / l < 0.9) align = std::max(align, dot(up, ns) / l);
+        }
+        const Real tc = clamp((align - 0.34) / 0.26, 0.0, 1.0);
         const Real tilt = tc * tc * (3 - 2 * tc);
 
         // ARB partner (explicit coupling to the other wheel's previous compression).
@@ -834,7 +850,12 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             si.dFxdKappa = std::max(0.0, f0.dFxdKappa);
             const Real fade = std::max(0.0, 1.0 - speed / wd.tire.lowSpeedDampingFadeSpeed);
             si.slipDamping = wd.tire.lowSpeedDampingPerLoad * ws.load * fade;
-            si.externalTorque = -wd.tire.rollingResistance * ws.hit.surface.rollingResistanceScale * ws.load * r *
+            // Rolling resistance, plus, when the tyre is riding on water, the lifted share of the
+            // load acting at the front of the patch (the water wedge): that spins the wheel down,
+            // as measured in NASA's hydroplaning tests.
+            const Real lifted = ws.hit.surface.waterDepth > 0 ? hydroplaneLift(wd.tire, ws.hit.surface.waterDepth, speed) : 0.0;
+            si.externalTorque = -(wd.tire.rollingResistance * ws.hit.surface.rollingResistanceScale * ws.load * r +
+                                  lifted * ws.load * wd.tire.patchHalfLength) *
                                 std::tanh(omega * r / 0.5);
         } else {
             ws.slip.tanAlpha = 0;
@@ -895,6 +916,10 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         const Vec3 n = ws.normal;
         Vec3 fc = ws.longDir * ws.forces.fx + ws.latDir * ws.forces.fy;
         if (!unsprung) fc += n * ws.load;
+        // Standing water pushes on the tyre itself, not through its grip: a drag at the patch
+        // against the rolling direction (one-sided water pulls the car toward it).
+        if (ws.load > 0 && ws.hit.surface.waterDepth > 0)
+            fc -= ws.longDir * (waterDrag(wd.tire, ws.hit.surface.waterDepth, ws.contactVx) * std::tanh(ws.contactVx / 0.5));
         force += fc;
         torque += cross(ws.patchPoint - comWorld, fc) + n * ws.forces.mz;
         debug_[w].fz = ws.load;
@@ -1007,9 +1032,16 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             for (int hk = 0; hk < hullCount_; ++hk) {
                 const Vec3& local = hull_[static_cast<std::size_t>(hk)];
                 const Vec3 p = body_.position + q.rotate(local);
-                const GroundHit h = ground.raycast({p.x, p.y, p.z + 1.5}, {0, 0, -1}, 3.0);
-                if (!h.hit) continue;
-                const Real pen = dot(h.point - p, h.normal);
+                GroundHit h = ground.raycast({p.x, p.y, p.z + 1.5}, {0, 0, -1}, 3.0);
+                Real pen = h.hit ? dot(h.point - p, h.normal) : -1.0;
+                // Steeply tilted (on its side, on its roof, on a wall, a banking or a loop): a vertical
+                // probe runs along a steep surface without finding it, so also probe along the body's
+                // own down axis and take the deeper of the two. On a plane both give the same depth.
+                if (up.z < 0.5) {
+                    const GroundHit h2 = ground.raycast(p + up * 1.5, -up, 3.0);
+                    const Real pen2 = h2.hit ? dot(h2.point - p, h2.normal) : -1.0;
+                    if (pen2 > pen) { h = h2; pen = pen2; }
+                }
                 if (pen <= 0) continue;
                 const Vec3 r = p - comWorld;
                 const Vec3 v = body_.velocity + cross(body_.angularVelocity, r);
