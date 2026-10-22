@@ -102,3 +102,11 @@ Bicycles, e-scooters/e-bikes and motorcycles at car-level fidelity. Plan, result
 3. Tire cleat-test calibration to settle the 5- vs 8-sample contact layout sensitivity (~30% on sharp curbs) and add continuous effective-road-profile enveloping (M2.2)
 4. ~~Wet model: water-film depth, speed-dependent grip, aquaplaning (M3.2)~~ first step done ([water.md](architecture/water.md))
 5. Solid axles, bushing compliance and tilted contact samples on top of the linkage kinematics (M2.3)
+
+## Damage (proposed)
+
+Soft-body ("BeamNG-like") damage, in three steps, surveyed in [research/vehicle-damage-survey.md](research/vehicle-damage-survey.md):
+(a) visible crush from the crash model on a coarse cage that drives the mesh (the browser demo's dents are a first cut);
+(b) mechanical damage: cage offsets move suspension mounts (toe, camber), wheels and panels detach above impulse thresholds, cooling and engine damage;
+(c) a node/beam chassis (XPBD beams with plastic yield and breaking) coupled to the rigid body at 1-2 kHz, replacing (a)'s faked crush on the same cage.
+
