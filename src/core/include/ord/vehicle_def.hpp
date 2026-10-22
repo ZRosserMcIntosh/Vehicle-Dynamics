@@ -111,6 +111,10 @@ struct BodyDef {
     Real halfWidth = 0.0;      // m (0 = widest track / 2 + 0.12)
     Real height = 0.0;         // m, floor to roof (0 = 1.15)
     Real floorZ = 0.0;         // m, floor height relative to the body origin (0 = from the hardpoints)
+    // m added to a derived floor (floorZ = 0): the garage's ride-height change, so raising the
+    // car on its suspension raises its floor too (the derived floor otherwise follows the
+    // hardpoints the garage moves and would keep the same clearance).
+    Real clearanceOffset = 0.0;
     Real friction = 0.5;       // sliding friction of the body on the road (scaled by the surface)
 };
 

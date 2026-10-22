@@ -91,6 +91,11 @@ struct TireParams {
     Real wetGrip = 1.0;               // mu multiplier on a fully wet surface (SurfaceProperties::wetness)
     Real aquaplaneSensitivity = 1.0;  // scales the surface's wet speed falloff
     Real looseGrip = 1.0;             // mu multiplier on a fully loose surface (gravel, soil, grass)
+    // Hydroplaning (SurfaceProperties::waterDepth): inflation pressure sets the
+    // speed at which water pressure in front of the patch lifts the tyre, tread
+    // depth how much water the grooves carry away before it does.
+    Real inflationPressure = 220.0;   // kPa (gauge)
+    Real treadDepth = 0.007;          // m (new road tyre ~8 mm; legal minimum 1.6 mm; slick 0)
 
     // Tread temperature window (used when the vehicle runs the tyre thermal
     // model, thermalCapacity > 0). Grip factor:
@@ -144,10 +149,34 @@ struct SurfaceProperties {
     // ordinary road tyre's grip on this surface.
     Real wetness = 0.0;
     Real looseness = 0.0;
+    // Standing water on the surface, m (0 = none). Drives hydroplaning
+    // (hydroplaneLift) and the water's drag on the tyres; independent of the
+    // crude wetSpeedFalloff above, which stays for existing surfaces.
+    Real waterDepth = 0.0;
 };
 
 // Height of the procedural micro-profile at a world point (0 when disabled).
 Real surfaceTextureHeight(const SurfaceProperties& s, Real x, Real y);
+
+// Hydroplaning. The water wedge in front of the contact patch carries a
+// dynamic pressure 1/2 rho v^2 C_L; the tyre lifts once that reaches the
+// inflation pressure p:
+//   v_p = sqrt(2 p / (rho_w C_L)),  C_L = 0.643
+// the lift coefficient that reproduces Horne's NASA rule v_p = 6.35 sqrt(p[kPa])
+// km/h (Horne & Dreher, NASA TN D-2056, 1963) for water deeper than the tread
+// can drain.
+Real hydroplaningSpeed(const TireParams& t);
+// Fraction of the contact patch lifted off the road, 0..1: rises from half the
+// hydroplaning speed to full lift at v_p, scaled by how far the water depth
+// exceeds what the tread grooves carry (none below 0.5 mm + 10 % of the tread,
+// all of it from 1 mm + 40 % of the tread).
+Real hydroplaneLift(const TireParams& t, Real waterDepth, Real speed);
+// Displacement drag of the water the tyre pushes aside, N: 1/2 rho_w Cd w h v^2
+// with the tyre's width w (2 patchHalfWidth), the water depth h and Cd = 0.75,
+// the method aircraft certification uses for contaminated runways (EASA CS-25
+// AMC 25.1591). It acts on the car at the contact patch, against the rolling
+// direction, whatever the tyre's grip: water under one side pulls toward it.
+Real waterDrag(const TireParams& t, Real waterDepth, Real speed);
 
 struct TireSlipState {
     // Transient ("deflection-based") slip quantities, integrated with the

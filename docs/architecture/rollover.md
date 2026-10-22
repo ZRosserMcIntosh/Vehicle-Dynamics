@@ -31,8 +31,19 @@ integration stays stable for any definition.
 
 Past ~53° of tilt (`up.z < 0.6`) a tyre's support fades out along a smoothstep, and it is gone by ~70°. Its contact
 ray along the car's own −z then points well off to the side and would prop the car back up. The
-tilt is measured against the vertical, not the local ground normal, because kerb edges have
-steep local normals under an upright car.
+tilt is measured against the vertical, because kerb edges have steep local normals under an
+upright car, or, where the ground the wheel found within its reach is itself steep (more than
+~25°), against that ground, whichever is better aligned: a car on a banking, a wall or inside a
+loop is on its wheels, not tipping over (`tests/test_water.cpp`: on a 70° face the tyres carry
+m g cos 70° and the body touches nothing).
+
+Each hull point is probed straight down. On a steep surface (tilted past 60°, `up.z < 0.5`) it is
+also probed along the car's own −z, and the deeper of the two counts: a vertical probe runs
+parallel to a wall beside a car on its side and would never find it. On a plane both give the
+same depth.
+
+A derived floor sits 13 cm above the static ground, plus `BodyDef::clearanceOffset`, which the
+garage sets to its mean ride-height change: raising the car on its suspension raises its floor.
 
 Telemetry: `upright` (body z-axis · world z, so −1 is on the roof), `bodyContacts` and
 `bodyContactForce`.
@@ -61,7 +72,7 @@ Telemetry: `upright` (body z-axis · world z, so −1 is on the roof), `bodyCont
 ## Limits
 
 - Rigid body: no crush of the roof or pillars, and nothing breaks off. Crash survivability does
-  not score rollovers.
+  not score rollovers. (The browser demo draws dents from the crush model, see crash-survivability.md.)
 - The hull is coarse (21 points). An edge can sink between points on a sharp ridge.
 - Tyre sidewall forces are not modelled. Between ~53° and ~70° the tyre's support fades out
   along a smoothstep rather than following a real sidewall.

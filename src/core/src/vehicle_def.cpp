@@ -23,8 +23,9 @@ std::string VehicleDefinition::validate() const {
     if (!inRange(steeringAckermann, 0, 1)) return "steeringAckermann must be within 0..1";
     if (!inRange(topSpeedLimit, 0, 200)) return "topSpeedLimit must be within 0..200 m/s (0 = none)";
     if (!inRange(body.overhangFront, 0, 5) || !inRange(body.overhangRear, 0, 5) || !inRange(body.halfWidth, 0, 3) ||
-        !inRange(body.height, 0, 5) || !inRange(body.floorZ, -3, 3) || !inRange(body.friction, 0, 3))
-        return "body hull sizes must be within 0..5 m (floorZ -3..3 m) and friction 0..3";
+        !inRange(body.height, 0, 5) || !inRange(body.floorZ, -3, 3) || !inRange(body.friction, 0, 3) ||
+        !inRange(body.clearanceOffset, -0.5, 0.5))
+        return "body hull sizes must be within 0..5 m (floorZ -3..3 m, clearanceOffset -0.5..0.5 m) and friction 0..3";
     if (wheels.empty() || wheels.size() > kMaxWheels) return "wheel count must be 1..kMaxWheels";
     if (axles.empty() || axles.size() > kMaxAxles) return "axle count must be 1..kMaxAxles";
     for (std::size_t i = 0; i < wheels.size(); ++i) {
@@ -58,6 +59,8 @@ std::string VehicleDefinition::validate() const {
         if (!inRange(t.verticalDamping, 0, 1e6)) return id + "tire verticalDamping must be within 0..1e6 N*s/m";
         if (!inRange(t.patchHalfLength, 0, 0.6 * t.radius) || !inRange(t.patchHalfWidth, 0, 1.0))
             return id + "patch half extents must be >= 0, length <= 0.6 r, width <= 1 m";
+        if (!inRange(t.inflationPressure, 20, 2000) || !inRange(t.treadDepth, 0, 0.05))
+            return id + "tire inflationPressure must be within 20..2000 kPa and treadDepth within 0..0.05 m";
         if (!inRange(sd.travel, 0.005, 2)) return id + "suspension travel must be within 0.005..2 m";
         if (!inRange(sd.springRate, 100, 1e8)) return id + "springRate must be within 100..1e8 N/m";
         if (!inRange(sd.springPreload, 0, 1e6)) return id + "springPreload must be within 0..1e6 N";
