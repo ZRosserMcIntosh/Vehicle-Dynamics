@@ -168,3 +168,34 @@ S 600 Guard from ~125); `web/smoke_test.mjs` drives it.
   `ord_crash_structure()` gives the crush zones (front, rear, side natural frequency; their crush
   limits; cabin half width) and `ord_vehicle_info()` the CoM, mass and inertia.
 - Memory is a fixed 128 MB (snapshots are ~66 kB each).
+
+## Damage (node/beam crash structure)
+
+`ord_set_damage(mode)`: `0` (default) keeps the crash model's impulses for walls and posts (the
+page draws its own dents); `1` builds the car's crash structure and mechanical damage
+([docs/architecture/damage.md](../docs/architecture/damage.md)) and lets it take every contact:
+walls, posts and trees through the demo's colliders, and the ground when the car is tilted or
+airborne. It is rebuilt with the car (setup changes, a new car) and survives resets and launches;
+`ord_repair()` puts the car back to new. In mode 1 a breakable wall breaks from the work the
+structure's contacts do on it (the same fracture energies), and the dummies ride the structure's
+own pulse: the step's acceleration, with the impact's delta-V, zone and intrusion recorded for
+their report. The S 600 Guard's structure is 1.8x stronger (an armoured cell and doors).
+
+`ord_damage_state()`: 22 + 6 per wheel doubles (all 0 when off):
+
+| Index | Meaning |
+| --- | --- |
+| 0, 1, 2 | on, solving (awake), version (bumps when the shape or a part changes: redraw) |
+| 3-7 | crush front, rear, left, right, roof (m, deepest) |
+| 8, 9, 10 | intrusion into the cabin (m), energy the structure absorbed (J), torn beams |
+| 11, 12, 13 | radiator (0 intact .. 1 destroyed), coolant left (0..1), engine temperature (deg C) |
+| 14, 15, 16 | engine damage (0..1), seized (0/1), torque the engine can still make (0..1) |
+| 17, 18 | steering offset at the road wheels (rad), steering lock left (0..1) |
+| 19, 20, 21 | drag scale, rear-wing scale, nodes touching something |
+| 22 + 6w ... | per wheel: toe (rad), camber (rad), bend (rad), torn off (0/1), punctured (0/1), deflation (0..1) |
+
+`ord_cage_count()` / `ord_cage_nodes()`: 8 doubles per node, body frame (ISO 8855): rest x, y, z,
+deformed x, y, z, zone (0 cell, 1 front, 2 rear, 3 side, 4 roof), free (0 anchored to the cell).
+Skin the body mesh to the rest positions once, then move it by the deformed ones.
+`ord_cage_beam_count()` / `ord_cage_beams()`: 4 doubles per beam: node a, node b, torn (0/1),
+plastic deformation / length (a debug view of where it yielded).

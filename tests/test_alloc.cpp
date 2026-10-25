@@ -90,3 +90,39 @@ TEST_CASE("alloc: SingleTrack::step does not allocate (NoSlip and Tyre)") {
         CHECK(!bike.faulted());
     }
 }
+
+namespace {
+struct AllocWall final : ord::ObstacleQuery {
+    ord::Real x0 = 0;
+    bool anyNear(const ord::Vec3& c, ord::Real r) const override { return c.x + r > x0; }
+    ord::ObstacleContact point(const ord::Vec3& p, const ord::Vec3&, ord::Real margin) const override {
+        ord::ObstacleContact c;
+        if (p.x - x0 > -margin) { c.hit = true; c.depth = p.x - x0; c.normal = {-1, 0, 0}; c.id = 1; }
+        return c;
+    }
+};
+}  // namespace
+
+TEST_CASE("alloc: the crash structure does not allocate (driving, crashing, on its roof, repair)") {
+    FlatGround g;
+    Vehicle v(vehicles::referenceSaloonAwd(), makePreset(DrivingPreset::Sport));
+    v.reset({0, 0, 0.6}, 0, g);
+    v.enableDamage();
+    AllocWall wall;
+    wall.x0 = 40;
+    v.setObstacles(&wall);
+    DriverInput in;
+    in.throttle = 1.0;
+    for (int i = 0; i < 60; ++i) v.step(1.0 / 360, in, g);  // warm-up
+    const long long before = gAllocations.load();
+    for (int i = 0; i < 360 * 4; ++i) v.step(1.0 / 360, in, g);  // drives into the wall
+    RigidBodyState s = v.state();
+    s.orientation = Quat::fromAxisAngle({1, 0, 0}, kPi) * s.orientation;
+    s.position.z += 1.6;
+    v.setChassisState(s);
+    for (int i = 0; i < 360; ++i) v.step(1.0 / 360, in, g);  // lands on its roof
+    v.repairDamage();
+    for (int i = 0; i < 60; ++i) v.step(1.0 / 360, in, g);
+    CHECK(v.damageState().awake || v.damageState().version > 0);
+    CHECK(gAllocations.load() - before == 0);
+}

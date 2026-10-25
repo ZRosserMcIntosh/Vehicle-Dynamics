@@ -103,10 +103,11 @@ Bicycles, e-scooters/e-bikes and motorcycles at car-level fidelity. Plan, result
 4. ~~Wet model: water-film depth, speed-dependent grip, aquaplaning (M3.2)~~ first step done ([water.md](architecture/water.md))
 5. Solid axles, bushing compliance and tilted contact samples on top of the linkage kinematics (M2.3)
 
-## Damage (proposed)
+## Damage
 
-Soft-body ("BeamNG-like") damage, in three steps, surveyed in [research/vehicle-damage-survey.md](research/vehicle-damage-survey.md):
-(a) visible crush from the crash model on a coarse cage that drives the mesh (the browser demo's dents are a first cut);
-(b) mechanical damage: cage offsets move suspension mounts (toe, camber), wheels and panels detach above impulse thresholds, cooling and engine damage;
-(c) a node/beam chassis (XPBD beams with plastic yield and breaking) coupled to the rigid body at 1-2 kHz, replacing (a)'s faked crush on the same cage.
-
+Done in [architecture/damage.md](architecture/damage.md): (b) mechanical damage and (c) a node/beam
+crash structure (XPBD beams with plastic yield, hardening and tearing) solved with the rigid body,
+which replaces the faked crush when it is on. Surveyed in
+[research/vehicle-damage-survey.md](research/vehicle-damage-survey.md).
+Next: car-to-car contact (two structures), detachable panels and bumpers as their own bodies,
+glass in the greenhouse, a finer lattice per car from its mesh.

@@ -295,5 +295,35 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   }
   check('stunt park: the clothoid loop goes all the way round', round && state()[23] === 0, `${top.toFixed(1)} m loop, top reached ${zMax.toFixed(1)} m`);
 }
+// damage: the node/beam crash structure on the barrier, a storefront it breaks, repair
+{
+  const D = () => new Float64Array(M.HEAPF64.buffer, M._ord_damage_state(), 22 + 6 * 8).slice();
+  const occ = () => new Float64Array(M.HEAPF64.buffer, M._ord_occupant_state(0), 24).slice();
+  const CY = M._ord_crash_lane_y(), BX = M._ord_crash_barrier_x();
+  M._ord_set_preset(2); M._ord_set_aids(0, 0, 0, 1);
+  M._ord_create(6, BX - 30, CY, 0);
+  M._ord_set_damage(1);
+  check('damage: structure on', D()[0] === 1 && M._ord_cage_count() > 50 && M._ord_cage_beam_count() > 200, `${M._ord_cage_count()} nodes, ${M._ord_cage_beam_count()} beams`);
+  M._ord_launch(BX - 6, CY, 0, 56 / 3.6, 0);
+  let peak = 0, prev = 56 / 3.6;
+  for (let i = 0; i < 720; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); const v = state()[7]; peak = Math.max(peak, (prev - v) * 360 / 9.81); prev = v; }
+  const d = D(), o = occ();
+  check('damage: 56 km/h into the barrier crushes ~0.5 m; the dummies ride the structure\'s pulse', d[3] > 0.35 && d[3] < 0.8 && peak > 15 && peak < 50 && o[7] === 1 && o[8] === 1 && state()[23] === 0,
+        `crush ${d[3].toFixed(2)} m, peak ${peak.toFixed(0)} g, report: zone ${o[8]}, delta-V ${(o[9] * 3.6).toFixed(0)} km/h, chest ${o[13].toFixed(0)} g, radiator ${d[11].toFixed(2)}`);
+  const nodes = new Float64Array(M.HEAPF64.buffer, M._ord_cage_nodes(), 8 * M._ord_cage_count()).slice();
+  let moved = 0; for (let i = 0; i < M._ord_cage_count(); ++i) moved = Math.max(moved, nodes[8 * i] - nodes[8 * i + 3]);
+  check('damage: the node buffer shows the crushed shape', Math.abs(moved - d[3]) < 0.05, `front node moved back ${moved.toFixed(2)} m`);
+  M._ord_repair();
+  check('damage: repair', D()[3] === 0 && D()[11] === 0, '');
+  // the glass storefront: the structure's contact work breaks it, the car goes through
+  M._ord_reset_obstacles();
+  const SY = M._ord_smash_lane_y(0);
+  M._ord_launch(BX - 8, SY, 0, 30 / 3.6, 0);
+  let broke = 0;
+  for (let i = 0; i < 720; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); broke += M._ord_break_events(); }
+  check('damage: the structure breaks the glass storefront and carries on', broke >= 1 && state()[0] > BX + 1 && state()[7] > 4, `${broke} pane(s), ${(state()[7] * 3.6).toFixed(0)} km/h after`);
+  M._ord_set_damage(0);
+  check('damage: off again', D()[0] === 0 && M._ord_cage_count() === 0, '');
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

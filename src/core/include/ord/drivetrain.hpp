@@ -154,6 +154,14 @@ public:
     void setDifferential(std::size_t drivenAxle, const DifferentialDef& d) { def_.drivenAxles[drivenAxle].differential = d; }
     const DrivetrainTelemetry& telemetry() const { return telem_; }
     Real wotTorque(Real rpm) const;
+    // Engine damage (damage.hpp): the share of its torque the engine can still make, and a
+    // seized engine (no combustion; it drags like a dead engine until it stops).
+    void setEngineDamage(Real torqueScale, bool seized) {
+        torqueScale_ = torqueScale < 0 ? 0 : (torqueScale > 1 ? 1 : torqueScale);
+        seized_ = seized;
+    }
+    Real torqueScale() const { return torqueScale_; }
+    bool seized() const { return seized_; }
 
 private:
     enum class FrictionKind { Clutch, Brake, AxleDiff, CenterDiff };
@@ -177,6 +185,8 @@ private:
     std::size_t frictionCount_ = 0;
     Real lastInputTorque_ = 0;
     bool limiterCut_ = false;
+    Real torqueScale_ = 1;
+    bool seized_ = false;
     DrivetrainTelemetry telem_;
 };
 

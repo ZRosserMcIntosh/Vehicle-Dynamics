@@ -20,6 +20,7 @@
 #include "src/kinematics.cpp"
 #include "src/assists.cpp"
 #include "src/crash.cpp"
+#include "src/damage.cpp"
 #include "src/debug_draw.cpp"
 #include "src/drivetrain.cpp"
 #include "src/ground.cpp"

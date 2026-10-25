@@ -78,7 +78,8 @@ Real Drivetrain::engineTorque(Real omega, Real throttle) const {
     Real thr = std::max(clamp(throttle, 0.0, 1.0), idleThrottle);
     if (limiterCut_) thr = 0;
     const Real loss = omega > 0 ? e.frictionTorque + e.frictionPerRadS * omega : 0.0;
-    return thr * (wotTorque(rpm) + loss) - loss;
+    if (seized_) return omega > 0 ? -4.0 * loss : 0.0;  // no combustion, scored bores
+    return thr * (torqueScale_ * wotTorque(rpm) + loss) - loss;
 }
 
 Real Drivetrain::gearRatio(int gear) const {

@@ -139,6 +139,24 @@ ImpactZone OccupantSim::impact(const Vec3& dv) {
     return zone;
 }
 
+void OccupantSim::recordImpact(const Vec3& dv, Real intrusion) {
+    if (std::abs(dv.x) < 1e-6 && std::abs(dv.y) < 1e-6) return;
+    evDeltaV_[0] += dv.x;
+    evDeltaV_[1] += dv.y;
+    const Real ex = evDeltaV_[0], ey = evDeltaV_[1];
+    const ImpactZone zone = std::abs(ex) >= std::abs(ey) ? (ex < 0 ? ImpactZone::Front : ImpactZone::Rear)
+                                                         : (ey > 0 ? ImpactZone::Right : ImpactZone::Left);
+    if (intrusion > intrusionNow_ && zone != ImpactZone::Rear) {
+        // Front: the dash and footwell come back; side: the door comes in.
+        intrusionNow_ = std::min(intrusion, 0.5);
+        intrusionAxisSign_ = zone == ImpactZone::Front ? 1 : zone == ImpactZone::Right ? -2 : 2;
+    }
+    evIntrusion_ = std::max(evIntrusion_, std::min(intrusion, 0.5));
+    eventActive_ = true;
+    evZone_ = zone;
+    quiet_ = 0;
+}
+
 Real OccupantSim::headForce(int axis, Real h, Real hv, Real u, Real v) const {
     Real a = spring(kNeckW, kNeckZ, h - u, hv - v);
     if (axis == 0) {
