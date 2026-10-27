@@ -81,6 +81,14 @@ constexpr Real kRollKerbY = -120.0, kRollKerbX0 = -420.0, kRollKerbX1 = -300.0;
 constexpr Real kRollRampLaneY = -87.0, kRollRampX0 = -265.0, kRollRampX1 = -255.0, kRollRampH = 0.9;
 // Crash-test lane north of the skidpads: run-up from x = -440, barrier at x = -150.
 constexpr Real kCrashLaneY = 125.0, kCrashBarrierX = -150.0, kCrashPoleX = -230.0;
+// Smash lane north of it: three run-up lanes, each ending in a breakable wall at the barrier's x,
+// built from three 2.5 m sections so a car punches a hole and leaves the rest standing.
+// Fracture energies per section are representative estimates, not test data: a 10 mm storefront
+// pane (~1.5 kJ, gives at a walking pace), an unreinforced hollow-block wall 2 m high (~25 kJ,
+// a car breaches it from ~20 km/h), a double-wythe brick wall 2 m high (~120 kJ, ~45 km/h).
+constexpr Real kSmashLaneY0 = kCrashLaneY + 28.0, kSmashLaneSpacing = 10.0;
+constexpr double kBreakEnergy[3] = {1500.0, 25000.0, 120000.0};
+Real smashLaneY(int k) { return kSmashLaneY0 + kSmashLaneSpacing * k; }
 
 Real cosBump(Real x, Real c, Real len, Real h) {
     const Real d = std::abs(x - c);
@@ -195,7 +203,10 @@ struct HeightfieldGround final : GroundQuery {
 };
 
 struct Colliders {
-    struct Seg { double ax, ay, bx, by, z0, z1; };
+    // A wall segment. material 0 is rigid; 1 glass, 2 hollow block, 3 brick break once a hit
+    // carries more energy than what is left of breakEnergy (hits that fall short crack it:
+    // half their energy stays as damage). A broken segment no longer collides.
+    struct Seg { double ax, ay, bx, by, z0, z1; int material = 0; double breakEnergy = 0, damage = 0; bool broken = false; };
     struct Circ { double x, y, r, z0, z1; };
     std::vector<Seg> segs;
     std::vector<Circ> circs;
@@ -221,6 +232,8 @@ struct Sim {
     int world = 0;
     Colliders col;
     double impact = 0;  // largest collision speed change since the last publish (m/s)
+    struct BreakEvent { int seg, material; double px, py, nx, ny, speed, kept; };
+    std::vector<BreakEvent> breaks;  // walls broken since the page last asked
     std::unique_ptr<Vehicle> vehicle;
     DriverInput input;
     AssistConfig assists;
@@ -297,6 +310,16 @@ void ensureGround() {
     // end (frontal tests) and a 30 cm pole beside it (side-impact pole test).
     g.col.segs = {{kCrashBarrierX, kCrashLaneY - 8, kCrashBarrierX, kCrashLaneY + 8, -1, 1.5}};
     g.col.circs = {{kCrashPoleX, kCrashLaneY + 16, 0.15, -1, 6}};
+    for (int k = 0; k < 3; ++k) {
+        const double y0 = smashLaneY(k) - 3.75;
+        for (int i = 0; i < 3; ++i) {
+            Colliders::Seg s{kCrashBarrierX, y0 + 2.5 * i, kCrashBarrierX, y0 + 2.5 * (i + 1), k == 0 ? 0.1 : -0.5, k == 0 ? 2.8 : 2.0};
+            s.material = k + 1;
+            s.breakEnergy = kBreakEnergy[k];
+            g.col.segs.push_back(s);
+        }
+    }
+    g.breaks.reserve(16);
     g.col.gx0 = -300; g.col.gy0 = -300; g.col.gcell = 8; g.col.gn = 75;
     g.col.build();
     g.ground = std::move(t);
@@ -327,6 +350,7 @@ void resolveCollisions() {
         const double zc = b.position.z;
         // deepest contact this iteration
         double best = 0, nx = 0, ny = 0, px = 0, py = 0, bestZ0 = 0, bestZ1 = 0;
+        int bestSeg = -1;
         const int gi = std::clamp(static_cast<int>((cx - g.col.gx0) / g.col.gcell), 0, g.col.gn - 1);
         const int gj = std::clamp(static_cast<int>((cy - g.col.gy0) / g.col.gcell), 0, g.col.gn - 1);
         auto obbProj = [&](double ax, double ay) { return ex * std::abs(u.x * ax + u.y * ay) + ey * std::abs(vx * ax + vy * ay); };
@@ -336,6 +360,7 @@ void resolveCollisions() {
             for (int id : g.col.grid[static_cast<std::size_t>(j) * g.col.gn + i]) {
                 if (id >= 0) {
                     const auto& s = g.col.segs[static_cast<std::size_t>(id)];
+                    if (s.broken) continue;
                     if (zc + 1.0 < s.z0 || zc - 0.5 > s.z1) continue;
                     // SAT: axes u, v, segment normal
                     double sx = s.bx - s.ax, sy = s.by - s.ay; const double sl = std::sqrt(sx * sx + sy * sy); if (sl < 1e-4) continue;
@@ -353,7 +378,7 @@ void resolveCollisions() {
                         if (o < minO) { minO = o; const double sg = (o1 < o2) ? -1 : 1; mx = A[0] * sg; my = A[1] * sg; }
                     }
                     if (sep || minO <= best) continue;
-                    best = minO; nx = mx; ny = my; bestZ0 = s.z0; bestZ1 = s.z1;
+                    best = minO; nx = mx; ny = my; bestZ0 = s.z0; bestZ1 = s.z1; bestSeg = id;
                     // contact point: segment point closest to the box centre
                     const double t = std::clamp((cx - s.ax) * sx + (cy - s.ay) * sy, 0.0, sl);
                     px = s.ax + sx * t; py = s.ay + sy * t;
@@ -369,14 +394,12 @@ void resolveCollisions() {
                         if (ox < oy) { pen = ox + c.r; lnx = lx > 0 ? -1 : 1; lny = 0; } else { pen = oy + c.r; lnx = 0; lny = ly > 0 ? -1 : 1; }
                     }
                     if (pen <= best) continue;
-                    best = pen; nx = lnx * u.x + lny * vx; ny = lnx * u.y + lny * vy; bestZ0 = c.z0; bestZ1 = c.z1;
+                    best = pen; nx = lnx * u.x + lny * vx; ny = lnx * u.y + lny * vy; bestZ0 = c.z0; bestZ1 = c.z1; bestSeg = -1;
                     px = cx + qx * u.x + qy * vx; py = cy + qx * u.y + qy * vy;
                 }
             }
         }
         if (best <= 0) break;
-        // positional correction (slightly more than the overlap)
-        b.position.x += nx * (best + 0.002); b.position.y += ny * (best + 0.002);
         // Impulse at the contact point, in 3D: the hit can pitch and roll the car as well as
         // yaw it. The contact height is the CoM's, kept within the obstacle's vertical extent,
         // so a low wall or post hits below the CoM and can trip a car sliding into it.
@@ -388,8 +411,34 @@ void resolveCollisions() {
         const Mat3 invI = R * Mat3::diagonal({1 / std::max(d.inertia.x, 1.0), 1 / std::max(d.inertia.y, 1.0), 1 / std::max(d.inertia.z, 1.0)}) * R.transposed();
         const Vec3 vc = b.velocity + cross(b.angularVelocity, r);
         const double vn = dot(vc, n);
+        auto invMass = [&](const Vec3& dir) { const Vec3 rd = cross(r, dir); return 1 / m + dot(rd, invI * rd); };
+        if (bestSeg >= 0 && vn < 0) {
+            // A breakable wall: the hit's energy along the normal (with the effective mass at
+            // the contact, so a glancing corner hit carries less) against what is left of the
+            // wall's fracture energy. Through: the wall takes that much, the car keeps the rest
+            // and is not pushed out. Short: the wall holds like a rigid one and is weakened.
+            auto& s = g.col.segs[static_cast<std::size_t>(bestSeg)];
+            if (s.material != 0 && s.breakEnergy > 0) {
+                const double kin = 0.5 * vn * vn / invMass(n);
+                const double left = s.breakEnergy - s.damage;
+                if (kin >= left) {
+                    const double rest = kin - left;
+                    const double vnAfter = -std::sqrt(2 * rest * invMass(n));
+                    const Vec3 jv = n * ((vnAfter - vn) / invMass(n));
+                    b.velocity = b.velocity + jv * (1 / m);
+                    b.angularVelocity = b.angularVelocity + invI * cross(r, jv);
+                    s.broken = true;
+                    if (g.breaks.size() < 16) g.breaks.push_back({bestSeg, s.material, cp.x, cp.y, nx, ny, -vn, rest / std::max(kin, 1e-9)});
+                    g.impact = std::max(g.impact, vnAfter - vn);
+                    changed = true;
+                    continue;  // no push-out; the broken section no longer collides
+                }
+                s.damage += 0.5 * kin;
+            }
+        }
+        // positional correction (slightly more than the overlap)
+        b.position.x += nx * (best + 0.002); b.position.y += ny * (best + 0.002);
         if (vn < 0) {
-            auto invMass = [&](const Vec3& dir) { const Vec3 rd = cross(r, dir); return 1 / m + dot(rd, invI * rd); };
             const double e = vn < -6 ? 0.15 : 0.05;
             const double jn = -(1 + e) * vn / invMass(n);
             Vec3 jv = n * jn;
@@ -602,8 +651,15 @@ ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
     return 1;
 }
 
+// Rebuilds every broken wall (R does this too).
+ORD_EXPORT void ord_reset_obstacles() {
+    for (auto& s : g.col.segs) { s.broken = false; s.damage = 0; }
+    g.breaks.clear();
+}
+
 ORD_EXPORT void ord_reset(double x, double y, double yaw) {
     if (!g.vehicle) return;
+    ord_reset_obstacles();
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
     if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
     g.accumulator = 0;
@@ -908,6 +964,31 @@ ORD_EXPORT double* ord_occupant_state(int seat) {
 }
 // Crash-test lane: y, barrier x, pole x (pole centre is 16 m north of the lane centre, 30 cm across).
 ORD_EXPORT double ord_crash_lane_y() { return kCrashLaneY; }
+// Smash lane k (0 glass storefront, 1 hollow-block wall, 2 brick wall): its centre y.
+ORD_EXPORT double ord_smash_lane_y(int k) { return smashLaneY(k < 0 ? 0 : k > 2 ? 2 : k); }
+// The world's wall segments for drawing: 8 doubles each (ax, ay, bx, by, z0, z1, material, broken).
+namespace { std::vector<double> g_obst; std::array<double, 16 * 8> g_breaks{}; }
+ORD_EXPORT int ord_obstacle_count() { return static_cast<int>(g.col.segs.size()); }
+ORD_EXPORT double* ord_obstacles() {
+    g_obst.resize(g.col.segs.size() * 8);
+    double* o = g_obst.data();
+    for (const auto& s : g.col.segs) { o[0] = s.ax; o[1] = s.ay; o[2] = s.bx; o[3] = s.by; o[4] = s.z0; o[5] = s.z1; o[6] = s.material; o[7] = s.broken ? 1 : 0; o += 8; }
+    return g_obst.data();
+}
+// Walls broken since the last call: returns the count; ord_break_buffer() holds 8 doubles each
+// (segment, material, hit x, y, wall normal x, y, closing speed m/s, fraction of the hit's energy
+// the car kept).
+ORD_EXPORT int ord_break_events() {
+    const int n = static_cast<int>(g.breaks.size());
+    for (int i = 0; i < n; ++i) {
+        const auto& e = g.breaks[static_cast<std::size_t>(i)];
+        double* o = g_breaks.data() + 8 * i;
+        o[0] = e.seg; o[1] = e.material; o[2] = e.px; o[3] = e.py; o[4] = e.nx; o[5] = e.ny; o[6] = e.speed; o[7] = e.kept;
+    }
+    g.breaks.clear();
+    return n;
+}
+ORD_EXPORT double* ord_break_buffer() { return g_breaks.data(); }
 ORD_EXPORT double ord_roll_kerb_y() { return kRollKerbY; }
 ORD_EXPORT double ord_roll_ramp_lane_y() { return kRollRampLaneY; }
 ORD_EXPORT double ord_crash_barrier_x() { return kCrashBarrierX; }
