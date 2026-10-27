@@ -652,9 +652,7 @@ void applyDamage() {
         g.vehicle->setObstacles(nullptr);
         return;
     }
-    DamageConfig cfg;
-    if (g.carIndex == 9) cfg.strength = 1.8;  // the S 600 Guard: an armoured (VR10) cell and doors
-    g.vehicle->enableDamage(cfg);
+    g.vehicle->enableDamage(DamageConfig{});   // per-car strength and run-flats come from the definition
     g.vehicle->setObstacles(&g_obstacles);
 }
 // Rewind: snapshots of everything a step changes, newest last (see ord_snap_push).
@@ -1151,10 +1149,10 @@ void stepDamaged() {
     v.step(kStep, g.input, *g.ground);
     if (g.shadow && !g.shadow->faulted()) g.shadow->step(kStep, g.input, *g.ground);
     const DamageModel& dm = v.damage();
-    bool obstacleHit = false;
+    Vec3 contactDv{};  // the speed change the obstacles' contact impulses made this step (world)
     for (int i = 0; i < dm.impactCount(); ++i) {
         const ObstacleImpact& im = dm.impact(i);
-        obstacleHit = true;
+        contactDv += im.normal * (im.impulse / v.definition().mass);
         g.impact = std::max(g.impact, im.closingSpeed);
         int kind = im.id >= WebObstacles::kCircleId ? 1 : 0;
         if (im.id >= 0 && im.id < static_cast<int>(g.col.segs.size())) {
@@ -1175,7 +1173,11 @@ void stepDamaged() {
     Vec3 acc = v.telemetry().accelBody;
     const double am = length(acc), cap = 150 * 9.81;
     if (am > cap) acc = acc * (cap / am);
-    if (obstacleHit) {
+    // A crash for the dummies' report: only a real hit, the obstacles' contact alone decelerating
+    // the car at more than 5 g (scraping along a wall is not a crash); then the car's own speed
+    // change (in a hit that hard the tyres hardly count; the contact impulse itself overstates
+    // it, part of it goes into the structure's nodes and is damped away).
+    if (length(contactDv) > 5 * 9.81 * kStep) {
         const Vec3 dv = v.state().orientation.inverseRotate(v.state().velocity - vBefore);
         for (auto& o : g.occupant) o.recordImpact({dv.x, dv.y, 0}, v.damageState().intrusion);
     }

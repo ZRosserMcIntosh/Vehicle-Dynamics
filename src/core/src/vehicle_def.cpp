@@ -26,6 +26,7 @@ std::string VehicleDefinition::validate() const {
         !inRange(body.height, 0, 5) || !inRange(body.floorZ, -3, 3) || !inRange(body.friction, 0, 3) ||
         !inRange(body.clearanceOffset, -0.5, 0.5))
         return "body hull sizes must be within 0..5 m (floorZ -3..3 m, clearanceOffset -0.5..0.5 m) and friction 0..3";
+    if (!inRange(body.structureStrength, 0.2, 5)) return "body.structureStrength must be within 0.2..5";
     if (wheels.empty() || wheels.size() > kMaxWheels) return "wheel count must be 1..kMaxWheels";
     if (axles.empty() || axles.size() > kMaxAxles) return "axle count must be 1..kMaxAxles";
     for (std::size_t i = 0; i < wheels.size(); ++i) {

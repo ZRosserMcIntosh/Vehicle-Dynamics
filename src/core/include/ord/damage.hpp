@@ -69,9 +69,9 @@ public:
     virtual ~ObstacleQuery() = default;
     // Broadphase: could anything be within `radius` of `centre`? (cheap, conservative)
     virtual bool anyNear(const Vec3& centre, Real radius) const = 0;
-    // The deepest obstacle the point `p` is in or within `margin` of. `ref` is a point
-    // known to be outside every obstacle on the car's side (its centre of mass): thin walls
-    // push toward the side `ref` is on.
+    // The deepest obstacle the point `p` is in or within `margin` of. `ref` is where the point
+    // came from (its position at the start of the step, a little in toward the car's centre):
+    // thin walls push toward the side `ref` is on.
     virtual ObstacleContact point(const Vec3& p, const Vec3& ref, Real margin) const = 0;
     // Round or thin obstacles (posts, poles, trunks, wall ends) poking between nodes: the
     // deepest one the edge a-b is in, with the contact's parameter `t` along the edge (0..1).
@@ -106,6 +106,7 @@ struct DamageConfig {
     Real wheelOverload = 30.0;            // x static corner load: a suspension load past this breaks it
     Real pinchFlatDepth = 0.085;          // m of tyre deflection that pinches it on the rim
     Real deflateTime = 4.0;               // s for a punctured tyre to go flat
+    Real maxDeflation = 1.0;              // how flat it goes (run-flats: 0.25)
     Real radiatorCrush = 0.10;            // m of crush at the radiator that destroys it
     Real coolantLossTime = 45.0;          // s to lose all coolant from a destroyed radiator
 };
@@ -156,6 +157,7 @@ struct CageContact {
     Real impulse = 0;     // N*s, normal, summed over the substeps
     Real compliance = 0;  // m/N: the cell's own crush past the zones (anchored nodes on obstacles)
     Real maxDepth = 0;    // deepest the cell went in: it unloads plastically from there
+    Real allowance = 0;   // m of overlap left this substep (an existing overlap is pushed out gradually)
 };
 
 struct WheelDamage {
@@ -186,6 +188,8 @@ struct DamageState {
     Real plasticWork = 0;      // J absorbed by the structure since built or repaired
     int brokenBeams = 0;
     int nodeContacts = 0;      // nodes touching the ground or an obstacle in the last step
+    std::uint32_t solves = 0;  // steps the structure was solved (diagnostics, cost)
+    int droppedContacts = 0;   // contacts past kMaxCageContacts (not solved) since built or repaired
     bool awake = false;
     std::uint32_t version = 0;   // bumped whenever the shape or a part changes (redraw)
 };
@@ -266,7 +270,8 @@ private:
     int impactCount_ = 0;
     DamageState state_;
     int quietSteps_ = 0;
-    bool shapeChanged_ = false;
+    bool shapeChanged_ = false;     // the lattice yielded this step (measure, bump the version)
+    bool mechanicalDirty_ = false;  // the parts have not been re-read since the shape changed
     Real lastContactForce_ = 0;
     Real cellCompliance_ = 0;
     Real cellIntrusion_ = 0;

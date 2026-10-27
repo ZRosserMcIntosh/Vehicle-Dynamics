@@ -65,10 +65,24 @@ is used up. Past its crush limit the structure stiffens: those contacts get a co
 at 2.5× the front frequency, shared by the cell's front nodes, loading along it and unloading along
 a line 20× stiffer (crushed metal does not push back). How far the cell went in is the intrusion.
 
+**Overlaps that are already there.** A node can start a substep inside the ground: the
+structure woke up with the car already sunk in (a car tilting into a concave curve, where the
+overhangs sink below the surface by about x_f x_r / 2ρ, as on the loop), or a node was dragged in.
+Removing that in one substep (1/5760 s) would turn centimetres into a launch, so an existing
+overlap is pushed out at no more than 2 m/s, while the penetration a substep's own motion makes is
+corrected in full (nothing tunnels). Before this, the loop with damage on threw the car 985 m up.
+
+**Thin walls.** A wall with no thickness pushes a node toward the side it came from: the node's
+own position at the start of the step, a quarter of the way in toward the car's centre (not the
+centre itself, which is already past the wall when the car is half through a hole in it).
+
 **Sleep.** The structure is solved only when the host reports an obstacle near (`anyNear`, a
 broadphase), the car is tilted past ~30° or airborne (when the body hull would be active), or a
 wheel is gone. Otherwise the free nodes ride with the body at their deformed shape and nothing is
-queried. With the structure on, its nodes replace the hull as the car's collision with the ground.
+queried. Awake with nothing touching and the structure settled (driving past a wall, airborne),
+it is not solved either: the nodes ride with the body (6 s beside a wall: one solve). Solving
+costs ~0.4-0.7 ms per step in WebAssembly, only while something touches. With the structure on,
+its nodes replace the hull as the car's collision with the ground.
 
 **Calibration** (reference saloon, 1,800 kg, ω = 32 rad/s front, full-width rigid wall, coasting;
 `tests/test_damage.cpp` prints the table):
@@ -124,7 +138,18 @@ walls) never fault; a copy taken mid-crash continues bit-identically (rewind).
   frame. Skin the mesh to the nodes (each vertex to its nearest few rest positions).
 - The structure is stepped with `ChassisMode::Internal` only.
 
+## Per car
+
+`BodyDef::structureStrength` scales every beam (the S 600 Guard: 1.8, it crushes 0.36 m at
+56 km/h where the S 63 crushes 0.51 m) and `BodyDef::runFlatTyres` keeps a punctured tyre at a
+quarter flat (the Guard's PAX run-flats).
+
 ## Limits
+
+Rollover with the structure on is not the hull's rollover: its nodes are a different shape
+(no belt-line points at the ends, roof nodes on the cell's width), so marginal cases end
+differently (released at 70 degrees, the hull ends on its side, the structure on its roof; a
+35 km/h kerb trip rolls further). The rollover tests run with damage off.
 
 A coarse lattice (~110 nodes), one-dimensional beams, no panels, welds or material model, a rigid
 passenger cell (its crush is a contact compliance, not geometry), no car-to-car contact (obstacles

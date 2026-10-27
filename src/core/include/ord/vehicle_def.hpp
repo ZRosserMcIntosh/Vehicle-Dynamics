@@ -116,6 +116,10 @@ struct BodyDef {
     // hardpoints the garage moves and would keep the same clearance).
     Real clearanceOffset = 0.0;
     Real friction = 0.5;       // sliding friction of the body on the road (scaled by the surface)
+    // Crash structure (damage.hpp): its strength relative to a normal car (armoured cars > 1),
+    // and run-flat tyres (a punctured one keeps most of its shape).
+    Real structureStrength = 1.0;
+    bool runFlatTyres = false;
 };
 
 struct VehicleDefinition {

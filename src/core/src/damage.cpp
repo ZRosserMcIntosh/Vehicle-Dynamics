@@ -13,7 +13,8 @@ namespace {
 constexpr Real kEps = 1e-6;
 constexpr Real kMinRestRatio = 0.15;   // a beam crushed to 15% of its length is solid (bottomed out)
 constexpr Real kTearRatio = 1.45;      // stretched to 145% it tears
-constexpr Real kElasticStrain = 0.01;  // elastic strain at a beam's full (hardened) strength
+constexpr Real kElasticStrain = 0.01;
+constexpr Real kMaxDepenetration = 2.0;  // m/s: how fast an existing overlap is pushed out  // elastic strain at a beam's full (hardened) strength
 
 // The rigid body inside the solver: centre of mass, orientation and inverse inertia (world).
 struct SolverBody {
@@ -344,7 +345,8 @@ void DamageModel::repair(Real ambient) {
     impactCount_ = 0;
     quietSteps_ = 0;
     cellIntrusion_ = 0;
-    shapeChanged_ = true;
+    shapeChanged_ = false;
+    mechanicalDirty_ = true;
 }
 
 void DamageModel::snapToBody(const RigidBodyState& body) {
@@ -456,7 +458,7 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
         if (n.invMass > 0) return n.x + n.v * dt;
         return body.position + body.orientation.rotate(n.rest);
     };
-    for (int i = 0; i < nodeCount_ && nc < kMaxCageContacts; ++i) {
+    for (int i = 0; i < nodeCount_; ++i) {
         const CageNode& n = nodes_[static_cast<std::size_t>(i)];
         if (n.wheel >= 0 && state_.wheels[static_cast<std::size_t>(n.wheel)].detached) continue;
         const Vec3 p = endPos(i);
@@ -470,7 +472,8 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                 const Real pen2 = g2.hit ? dot(g2.point - p, g2.normal) : -1.0;
                 if (pen2 > pen) { gh = g2; pen = pen2; }
             }
-            if (gh.hit && pen > -margin) {
+            if (gh.hit && pen > -margin && nc >= kMaxCageContacts) ++state_.droppedContacts;
+            else if (gh.hit && pen > -margin) {
                 CageContact& c = contacts[static_cast<std::size_t>(nc++)];
                 c = CageContact{};
                 c.a = i;
@@ -480,8 +483,14 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                 c.closing = -dot(startVel(i), gh.normal);
             }
         }
-        if (nearObstacle && nc < kMaxCageContacts && n.wheel < 0) {
-            const ObstacleContact oc = obstacles->point(p, comWorld, margin);
+        if (nearObstacle && n.wheel < 0) {
+            if (nc >= kMaxCageContacts) { ++state_.droppedContacts; continue; }
+            // the side a thin wall pushes toward: where this node was at the start of the step,
+            // a quarter of the way in toward the centre (not the centre itself: half through a
+            // gap in a wall, the centre is past it while the rear is still behind it)
+            const Vec3 start0 = n.invMass > 0 ? n.x : start.position + start.orientation.rotate(n.rest);
+            const Vec3 ref = start0 + (comWorld - start0) * 0.25;
+            const ObstacleContact oc = obstacles->point(p, ref, margin);
             if (oc.hit) {
                 CageContact& c = contacts[static_cast<std::size_t>(nc++)];
                 c = CageContact{};
@@ -499,13 +508,14 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
         }
     }
     if (nearObstacle) {
-        for (int k = 0; k < beamCount_ && nc < kMaxCageContacts; ++k) {
+        for (int k = 0; k < beamCount_; ++k) {
             const CageBeam& bm = beams_[static_cast<std::size_t>(k)];
             if (!bm.edge || bm.broken) continue;
             Real t = 0;
             const Vec3 pa = endPos(bm.a), pb = endPos(bm.b);
             const ObstacleContact oc = obstacles->edge(pa, pb, margin, t);
             if (!oc.hit || t <= 0.02 || t >= 0.98) continue;  // at the ends the node contacts have it
+            if (nc >= kMaxCageContacts) { ++state_.droppedContacts; break; }
             CageContact& c = contacts[static_cast<std::size_t>(nc++)];
             c = CageContact{};
             c.a = bm.a;
@@ -517,6 +527,20 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
             c.obstacle = oc.id;
             c.closing = -dot(startVel(bm.a) * (1 - t) + startVel(bm.b) * t, oc.normal);
         }
+    }
+
+    // Nothing touching and the structure settled last step (driving past a wall, airborne on its
+    // side): no solve. The free nodes ride with the integrated body at their deformed shape.
+    if (nc == 0 && quietSteps_ > 0) {
+        for (int i = 0; i < nodeCount_; ++i) {
+            CageNode& n = nodes_[static_cast<std::size_t>(i)];
+            if (n.invMass <= 0) continue;
+            n.x = n.xPrev = body.position + body.orientation.rotate(n.local);
+            n.v = pointVelocity(body, n.x);
+        }
+        lastContactForce_ = 0;
+        if (++quietSteps_ > 30 && !nearObstacle && !groundOn) state_.awake = false;
+        return false;
     }
 
     // contacts in mirror pairs too (see the beams): an order, not a copy
@@ -542,6 +566,7 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
         }
     }
 
+    ++state_.solves;
     const int S = std::clamp(cfg_.substeps, 1, 64);
     const Real h = dt / S;
     const Real h2 = h * h;
@@ -571,7 +596,16 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
             n.x = n.x + n.v * h;
         }
         for (int k = 0; k < beamCount_; ++k) beams_[static_cast<std::size_t>(k)].lambda = 0;
-        for (int k = 0; k < nc; ++k) contacts[static_cast<std::size_t>(k)].lambdaN = contacts[static_cast<std::size_t>(k)].lambdaT = 0;
+        // Penetration that was already there at the start of the substep (a node that woke up
+        // inside the ground, an overhang sunk into a concave curve) is pushed out at no more than
+        // kMaxDepenetration: removing it within one substep would turn centimetres into a launch.
+        // Penetration the substep's own motion makes is corrected in full (nothing tunnels).
+        for (int k = 0; k < nc; ++k) {
+            CageContact& c = contacts[static_cast<std::size_t>(k)];
+            c.lambdaN = c.lambdaT = 0;
+            const Vec3 p0 = c.b < 0 ? prevPos(c.a) : prevPos(c.a) * (1 - c.t) + prevPos(c.b) * c.t;
+            c.allowance = std::max(0.0, dot(c.surface - p0, c.normal) - kMaxDepenetration * h);
+        }
 
         // ---- solve ----
         for (int it = 0; it < iters; ++it) {
@@ -602,7 +636,7 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                 CageContact& c = contacts[order[static_cast<std::size_t>(back ? nc - 1 - kk : kk)]];
                 if (c.b < 0) {
                     const Vec3 p = pos(c.a);
-                    const Real depth = dot(c.surface - p, c.normal);
+                    const Real depth = dot(c.surface - p, c.normal) - c.allowance;
                     if (depth > 0) {
                         // the cell crushing (compliant contact): loads at its stiffness, unloads
                         // along a line 20x stiffer from the deepest point (crushed metal does not
@@ -635,7 +669,7 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                 } else {
                     const Vec3 pa = pos(c.a), pb = pos(c.b);
                     const Vec3 q = pa * (1 - c.t) + pb * c.t;
-                    const Real depth = dot(c.surface - q, c.normal);
+                    const Real depth = dot(c.surface - q, c.normal) - c.allowance;
                     if (depth <= 0) continue;
                     const Real wa = wAt(c.a, pa, c.normal), wb = wAt(c.b, pb, c.normal);
                     const Real w = (1 - c.t) * (1 - c.t) * wa + c.t * c.t * wb;
@@ -643,6 +677,22 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                     c.lambdaN += dl;
                     move(c.a, pa, c.normal * (dl * (1 - c.t)));
                     move(c.b, pb, c.normal * (dl * c.t));
+                    if (c.mu > 0) {  // friction on the post, as for the nodes
+                        const Vec3 qa = pos(c.a), qb = pos(c.b);
+                        Vec3 slip = (qa * (1 - c.t) + qb * c.t) - (prevPos(c.a) * (1 - c.t) + prevPos(c.b) * c.t);
+                        slip -= c.normal * dot(slip, c.normal);
+                        const Real sl = length(slip);
+                        if (sl > kEps) {
+                            const Vec3 tt = slip / sl;
+                            const Real wt = (1 - c.t) * (1 - c.t) * wAt(c.a, qa, tt) + c.t * c.t * wAt(c.b, qb, tt);
+                            const Real dt2 = std::min(sl / std::max(wt, kEps), c.mu * c.lambdaN - c.lambdaT);
+                            if (dt2 > 0) {
+                                c.lambdaT += dt2;
+                                move(c.a, qa, tt * (-dt2 * (1 - c.t)));
+                                move(c.b, qb, tt * (-dt2 * c.t));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -750,11 +800,13 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
     if (shapeChanged_) {
         measure();
         ++state_.version;
+        shapeChanged_ = false;
+        mechanicalDirty_ = true;  // the parts are re-read from the new shape (stepMechanical)
     }
 
     // sleep once nothing touches and the lattice has settled
-    if (state_.nodeContacts == 0 && maxRel < 0.05 && !groundOn) {
-        if (++quietSteps_ > 30 && !nearObstacle) state_.awake = false;
+    if (state_.nodeContacts == 0 && maxRel < 0.05) {
+        if (++quietSteps_ > 30 && !nearObstacle && !groundOn) state_.awake = false;
     } else {
         quietSteps_ = 0;
     }
@@ -797,8 +849,8 @@ void DamageModel::stepMechanical(Real dt, const std::array<Real, kMaxWheels>& wh
     DamageState& s = state_;
     const DamageConfig& c = cfg_;
     bool changed = false;
-    if (shapeChanged_) {
-        shapeChanged_ = false;
+    if (mechanicalDirty_) {
+        mechanicalDirty_ = false;
         // suspension mounts: where the crush moved them, and the alignment that follows
         Real frontX = -1e9;
         for (std::size_t w = 0; w < wheelCount_; ++w) frontX = std::max(frontX, wheelPos_[w].x);
@@ -852,8 +904,8 @@ void DamageModel::stepMechanical(Real dt, const std::array<Real, kMaxWheels>& wh
             wd.punctured = true;
             changed = true;
         }
-        if (wd.punctured && wd.deflation < 1) {
-            wd.deflation = std::min(1.0, wd.deflation + dt / std::max(c.deflateTime, 0.1));
+        if (wd.punctured && wd.deflation < c.maxDeflation) {
+            wd.deflation = std::min(c.maxDeflation, wd.deflation + dt / std::max(c.deflateTime, 0.1));
             changed = true;
         }
     }

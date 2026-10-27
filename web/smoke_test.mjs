@@ -322,6 +322,38 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   let broke = 0;
   for (let i = 0; i < 720; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); broke += M._ord_break_events(); }
   check('damage: the structure breaks the glass storefront and carries on', broke >= 1 && state()[0] > BX + 1 && state()[7] > 4, `${broke} pane(s), ${(state()[7] * 3.6).toFixed(0)} km/h after`);
+  // a scrape along the barrier at 4 degrees is not a crash: no report for the dummies
+  M._ord_set_preset(1); M._ord_create(6, BX - 30, CY, 0); M._ord_set_damage(1);
+  const reports0 = occ()[6];
+  M._ord_launch(BX - 1.6, CY - 12, Math.PI / 2 - 4 * Math.PI / 180, 50 / 3.6, 0);
+  for (let i = 0; i < 360 * 3; ++i) { M._ord_set_input(0, 0.3, 0, 0, 0, 0); M._ord_step(1); }
+  for (let i = 0; i < 360; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); }
+  check('damage: scraping a wall is not a crash', occ()[6] === reports0 && state()[23] === 0, `${occ()[6] - reports0} report(s)`);
+  // the stunt park with damage on: the kicker lands clean, the loop goes round (no launch)
+  const A2 = new Float64Array(M.HEAPF64.buffer, M._ord_test_areas(), 35).slice();
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1); M._ord_create(6, -460, A2[11], 0); M._ord_set_damage(1);
+  M._ord_launch(-460, A2[11], 0, 80 / 3.6, 0);
+  for (let i = 0; i < 360 * 14; ++i) { const s = state(); M._ord_set_input(-0.2 * (s[1] - A2[11]), Math.max(0, Math.min(1, (80 / 3.6 - s[7]) * 0.5)), 0, 0, 0, 0); M._ord_step(1); }
+  check('damage: the kicker lands without damage', D()[9] < 500 && state()[23] === 0, `${D()[9].toFixed(0)} J absorbed`);
+  {
+    const nP = M._ord_loop_profile_count(), prof = new Float64Array(M.HEAPF64.buffer, M._ord_loop_profile(), 4 * nP).slice();
+    const len = prof[4 * (nP - 1) + 3];
+    const x0 = -420, y0 = A2[30] - (A2[29] - x0) * Math.tan(A2[34]);
+    M._ord_create(6, x0, y0, A2[34]); M._ord_set_damage(1); M._ord_launch(x0, y0, A2[34], 105 / 3.6, 0);
+    let sPrev = 0, zMax = 0;
+    for (let i = 0; i < 360 * 14; ++i) {
+      const s = state(); let steer = 0;
+      if (s[0] > A2[29] - 2 && s[1] > A2[30] - 4) {
+        let best = 1e9, sa = -1;
+        for (let k = 0; k < nP; ++k) { const sk = prof[4 * k + 3]; if (Math.abs(sk - sPrev) > 6) continue; const dx = A2[29] + prof[4 * k] - s[0], dz = prof[4 * k + 1] - s[2], dd = dx * dx + dz * dz; if (dd < best) { best = dd; sa = sk; } }
+        if (sa >= 0) { sPrev = sa; const yc = A2[30] + A2[32] * sa / len; const r10 = 2 * (s[4] * s[5] + s[3] * s[6]), r11 = 1 - 2 * (s[4] * s[4] + s[6] * s[6]); const vy = r10 * s[7] + r11 * s[8]; steer = Math.max(-0.3, Math.min(0.3, 0.25 * (yc - s[1]) - 0.25 * (vy - Math.abs(s[7]) * Math.sin(A2[34])))); }
+      }
+      M._ord_set_input(steer, s[0] < A2[29] - 5 ? Math.max(0, Math.min(1, (105 / 3.6 - s[7]) * 0.5)) : 1, 0, 0, 0, 0); M._ord_step(1);
+      zMax = Math.max(zMax, state()[2]);
+    }
+    check('damage: the loop with the crash structure on (no launch, no broken parts)', zMax > 30 && zMax < 40 && D()[9] < 5000 && [0, 1, 2, 3].every((w) => !D()[22 + 6 * w + 3]) && state()[23] === 0,
+          `top ${zMax.toFixed(1)} m, ${D()[9].toFixed(0)} J (the overhangs scrape the entry)`);
+  }
   M._ord_set_damage(0);
   check('damage: off again', D()[0] === 0 && M._ord_cage_count() === 0, '');
 }

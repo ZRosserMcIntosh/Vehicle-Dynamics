@@ -175,7 +175,10 @@ bool Vehicle::enableDamage(const DamageConfig& cfg) {
         intactTire_[w] = def_.wheels[w].tire;
         appliedDeflation_[w] = 0;
     }
-    damage_.build(cfg, cageBox_, def_.mass, nw, mounts, shoulder_, load, def_.aero.ambientTemperature);
+    DamageConfig c = cfg;
+    c.strength *= def_.body.structureStrength;  // armoured cars carry their own factor
+    if (def_.body.runFlatTyres) c.maxDeflation = std::min(c.maxDeflation, 0.25);
+    damage_.build(c, cageBox_, def_.mass, nw, mounts, shoulder_, load, def_.aero.ambientTemperature);
     damage_.snapToBody(body_);
     drivetrain_.setEngineDamage(1, false);
     return true;

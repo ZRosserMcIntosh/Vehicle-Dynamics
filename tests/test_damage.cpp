@@ -428,3 +428,127 @@ TEST_CASE("damage: random crashes never fault (cars, speeds, angles, posts)") {
     }
     CHECK(faults == 0);
 }
+
+TEST_CASE("damage: waking up already inside the ground pushes out gently (no launch)") {
+    // On its side, sunk 15 cm into the ground: the structure wakes with nodes deep in it. Before
+    // the depenetration limit this threw the car into the air.
+    FlatGround g;
+    Vehicle v = crashCar(vehicles::referenceSaloonAwd());
+    RigidBodyState s = v.state();
+    s.orientation = Quat::fromAxisAngle({1, 0, 0}, kPi / 2) * s.orientation;
+    Real lowest = 1e9;
+    for (int i = 0; i < v.damage().nodeCount(); ++i) lowest = std::min(lowest, (s.position + s.orientation.rotate(v.damage().node(i).rest)).z);
+    s.position.z += -0.15 - lowest;
+    v.setChassisState(s);
+    DriverInput in;
+    Real vmax = 0;
+    for (int i = 0; i < 360 * 2; ++i) {
+        v.step(1.0 / 360, in, g);
+        vmax = std::max(vmax, length(v.state().velocity));
+    }
+    std::printf("    woke 15 cm deep: fastest %.2f m/s, plastic work %.0f J\n", vmax, v.damageState().plasticWork);
+    CHECK(!v.faulted());
+    CHECK(vmax < 3.0);
+    CHECK(v.damageState().plasticWork < 5000);  // it drops onto its side: some crush, no launch
+}
+
+TEST_CASE("damage: a concave bank (overhangs sink into the curve) is driven like without damage") {
+    // Flat, then a 10 m radius curve up to a 50 degree wall: steep enough to wake the structure
+    // with the overhangs below the curve, as on the loop.
+    const Real R = 10, a = 50 * kPi / 180, x0 = 20;
+    TestTrackGround world([=](Real x, Real) {
+        const Real u = x - x0;
+        if (u <= 0) return 0.0;
+        const Real ua = R * std::sin(a);
+        if (u <= ua) return R - std::sqrt(R * R - u * u);
+        return R * (1 - std::cos(a)) + (u - ua) * std::tan(a);
+    });
+    auto run = [&](bool dmg, Real& zMax, Real& vMax) {
+        Vehicle v(vehicles::referenceSaloonAwd(), makePreset(DrivingPreset::Sport));
+        v.reset({0, 0, 0.6}, 0, world);
+        if (dmg) v.enableDamage();
+        v.placeOnGround(0, 0, 0, world, 60 / 3.6);
+        DriverInput in;
+        zMax = 0; vMax = 0;
+        for (int i = 0; i < 360 * 4; ++i) {
+            v.step(1.0 / 360, in, world);
+            zMax = std::max(zMax, v.state().position.z);
+            vMax = std::max(vMax, length(v.state().velocity));
+        }
+        CHECK(!v.faulted());
+        return v.damageEnabled() ? v.damageState().plasticWork : 0.0;
+    };
+    Real z0, v0, z1, v1;
+    run(false, z0, v0);
+    const Real work = run(true, z1, v1);
+    std::printf("    up the bank at 60 km/h: highest %.2f m without damage, %.2f m with; fastest %.1f / %.1f m/s; plastic %.0f J\n", z0, z1, v0, v1, work);
+    CHECK(v1 < v0 + 0.5);              // nothing adds speed
+    CHECK(std::abs(z1 - z0) < 1.5);    // the same climb, give or take a scrape
+    CHECK(work < 3000);                // a scrape at most
+}
+
+TEST_CASE("damage: driving past a wall without touching it does not solve the structure") {
+    // A wall 1.6 m to the side for 6 s: the structure is awake (an obstacle is near) but nothing
+    // touches, so after settling it carries the nodes with the body and solves nothing.
+    struct SideWall final : ObstacleQuery {
+        bool anyNear(const Vec3& c, Real r) const override { return c.y + r > 2.5; }
+        ObstacleContact point(const Vec3& p, const Vec3&, Real margin) const override {
+            ObstacleContact c;
+            if (p.y - 2.5 > -margin) { c.hit = true; c.depth = p.y - 2.5; c.normal = {0, -1, 0}; c.id = 9; }
+            return c;
+        }
+    } wall;
+    FlatGround g;
+    Vehicle v = crashCar(vehicles::referenceSaloonAwd());
+    v.placeOnGround(0, 0, 0, g, 20);
+    v.setObstacles(&wall);
+    DriverInput in;
+    in.throttle = 0.3;
+    for (int i = 0; i < 360 * 6; ++i) v.step(1.0 / 360, in, g);
+    std::printf("    6 s beside a wall: %u solves of %d steps, awake %d\n", v.damageState().solves, 360 * 6, v.damageState().awake);
+    CHECK(v.damageState().awake);
+    CHECK(v.damageState().solves < 40);
+    CHECK(v.damageState().plasticWork == 0);
+}
+
+TEST_CASE("damage: a thin wall judges each node from where that node came from") {
+    // The car straddles the line y = 0 (its centre past it, its rear still behind it), as when
+    // half through a hole punched in a wall. A thin wall pushes a node toward the side of `ref`;
+    // judged from the car's centre, the rear nodes would be pulled through the wall.
+    struct Probe final : ObstacleQuery {
+        mutable int wrongSide = 0, asked = 0;
+        bool anyNear(const Vec3&, Real) const override { return true; }
+        ObstacleContact point(const Vec3& p, const Vec3& ref, Real) const override {
+            ++asked;
+            if (p.y < -0.3 && ref.y > 0) ++wrongSide;
+            return {};
+        }
+    } probe;
+    FlatGround g;
+    Vehicle v = crashCar(vehicles::referenceSaloonAwd());
+    v.placeOnGround(0, 0.6, kPi / 2, g, 2);   // heading +y, centre 0.6 m past the line
+    v.setObstacles(&probe);
+    DriverInput in;
+    for (int i = 0; i < 4; ++i) v.step(1.0 / 360, in, g);
+    std::printf("    %d point queries, %d judged from the far side\n", probe.asked, probe.wrongSide);
+    CHECK(probe.asked > 0);
+    CHECK(probe.wrongSide == 0);
+}
+
+TEST_CASE("damage: armour and run-flats come from the definition (S 600 Guard)") {
+    const CrashResult guard = frontal(vehicles::mercedesS600Guard(), 56);
+    const CrashResult s63 = frontal(vehicles::mercedesAmgS63(), 56);
+    std::printf("    56 km/h: S 600 Guard crush %.2f m, S 63 %.2f m\n", guard.crush, s63.crush);
+    CHECK(guard.crush < 0.8 * s63.crush);   // the armoured structure crushes less
+    // a pinch flat on a run-flat keeps most of its shape
+    TestTrackGround world([](Real x, Real y) { return (y > 0 && x > 30 && x < 30.6) ? 0.25 : 0.0; });
+    Vehicle v(vehicles::mercedesS600Guard(), makePreset(DrivingPreset::Simulation));
+    v.reset({0, 0, 0.6}, 0, world);
+    v.enableDamage();
+    v.placeOnGround(0, 0, 0, world, 80 / 3.6);
+    DriverInput in;
+    for (int i = 0; i < 360 * 8; ++i) v.step(1.0 / 360, in, world);
+    const DamageState& d = v.damageState();
+    std::printf("    Guard over a 25 cm kerb at 80 km/h: punctured FL %d, deflation %.2f\n", d.wheels[0].punctured, d.wheels[0].deflation);
+    if (d.wheels[0].punctured) CHECK(d.wheels[0].deflation <= 0.25 + 1e-9);
+}
