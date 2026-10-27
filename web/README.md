@@ -199,3 +199,29 @@ deformed x, y, z, zone (0 cell, 1 front, 2 rear, 3 side, 4 roof), free (0 anchor
 Skin the body mesh to the rest positions once, then move it by the deformed ones.
 `ord_cage_beam_count()` / `ord_cage_beams()`: 4 doubles per beam: node a, node b, torn (0/1),
 plastic deformation / length (a debug view of where it yielded).
+
+## Telemetry and wind tunnel
+
+`ord_telemetry()`: 16 + 6 per wheel doubles from the vehicle's telemetry frame (the last step):
+
+| Index | Meaning |
+| --- | --- |
+| 0, 1 | roll, pitch (rad) |
+| 2, 3, 4 | engine torque, driveshaft torque (N·m), kinetic energy (J) |
+| 5, 6, 7, 8, 9 | airspeed (m/s), downforce front, rear, of which the rear wing, drag (N) |
+| 10, 11, 12 | floor clearance front, rear (m), aero yaw (rad) |
+| 13, 14, 15 | wing stalled, floor stalled (0/1), brake input |
+| 16 + 6w ... | per wheel: suspension compression, travel (m), compression rate (m/s), tyre temperature (deg C), camber (rad), brake torque (N·m) |
+
+`ord_aero_info()`: 24 doubles describing the car's aero for an airflow view: drag area, front and
+rear downforce area (m²), rear wing span, chord, x, y, z, angle (span 0: no wing), side force
+area, air density; the body box (body frame): front, rear, half width, floor, roof, belt line,
+roof rear, roof front; aero floor z, ride-height reference, floor stall height (0: the floor is
+not ride-height sensitive), mass.
+
+`ord_tunnel(on, speed)`: a rolling road. While on, the car's horizontal position is held where it
+was when the tunnel started, every step (`Vehicle::shiftPosition`, which moves the crash
+structure with it), and its forward speed at `speed` m/s (0: its own speed). The speed is a
+restraint, as on a real rolling road, so the engine and drag do not change it; the tyres, the
+suspension and the aero run at full physics. A cross wind (`ord_set_wind`) sets the yaw. Calling
+it again while on only changes the speed; `ord_tunnel(0, 0)` releases the car.

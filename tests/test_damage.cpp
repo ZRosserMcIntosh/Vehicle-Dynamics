@@ -552,3 +552,40 @@ TEST_CASE("damage: armour and run-flats come from the definition (S 600 Guard)")
     std::printf("    Guard over a 25 cm kerb at 80 km/h: punctured FL %d, deflation %.2f\n", d.wheels[0].punctured, d.wheels[0].deflation);
     if (d.wheels[0].punctured) CHECK(d.wheels[0].deflation <= 0.25 + 1e-9);
 }
+
+TEST_CASE("damage: a rolling road holds the car in place and the structure goes with it") {
+    // shiftPosition every step (a wind tunnel's rolling road, a host moving its origin) on a world
+    // that is the same all along x: the held car does what the free one does, scraping along a
+    // wall included (its structure solved every step, its nodes shifted with it)
+    struct SideWall final : ObstacleQuery {
+        bool anyNear(const Vec3& c, Real r) const override { return c.y + r > 1.0; }
+        ObstacleContact point(const Vec3& p, const Vec3&, Real margin) const override {
+            ObstacleContact c;
+            if (p.y - 1.0 > -margin) { c.hit = true; c.depth = p.y - 1.0; c.normal = {0, -1, 0}; c.id = 9; }
+            return c;
+        }
+    } wall;
+    FlatGround world;
+    auto run = [&](bool held) {
+        Vehicle v = crashCar(vehicles::referenceSportsRwd());
+        v.placeOnGround(0, 0, 0.04, world, 80 / 3.6);   // angled into the wall: it brushes along it
+        v.setObstacles(&wall);
+        DriverInput in;
+        in.throttle = 0.3;
+        Real shifted = 0;
+        for (int i = 0; i < 360 * 3; ++i) {
+            v.step(1.0 / 360, in, world);
+            if (held) { const Real x = v.state().position.x; v.shiftPosition({-x, 0, 0}); shifted += x; }
+        }
+        struct R { Real x, y, v, work; std::uint32_t solves; } r{v.state().position.x + shifted, v.state().position.y, length(v.state().velocity), v.damageState().plasticWork, v.damageState().solves};
+        return r;
+    };
+    const auto f = run(false), h = run(true);
+    std::printf("    free: x %.2f y %.3f v %.2f work %.0f J solves %u; held: x %.2f y %.3f v %.2f work %.0f J solves %u\n",
+                f.x, f.y, f.v, f.work, f.solves, h.x, h.y, h.v, h.work, h.solves);
+    CHECK(f.solves > 100);   // it did scrape
+    CHECK(std::abs(h.x - f.x) < 0.05);
+    CHECK(std::abs(h.y - f.y) < 0.01);
+    CHECK(std::abs(h.v - f.v) < 0.05);
+    CHECK(std::abs(h.work - f.work) < 0.05 * f.work + 5);
+}

@@ -154,12 +154,20 @@ public:
     void repairDamage();
     // Static obstacles for the crash structure (walls, posts). Not owned; may be null.
     void setObstacles(const ObstacleQuery* obstacles) { obstacles_ = obstacles; }
+    // The body box the hull and the crash structure are built from (body frame).
+    const CageBox& bodyBox() const { return cageBox_; }
 
     // ---- Accessors ----
     const VehicleDefinition& definition() const { return def_; }
     const VehicleFidelity& fidelity() const { return fidelity_; }
     void setFidelity(const VehicleFidelity& f);
     const RigidBodyState& state() const { return body_; }
+    // Translates the car (and its crash structure) by `d` without touching its motion: a host
+    // moving its world origin, a rolling road holding the car in place.
+    void shiftPosition(const Vec3& d) {
+        body_.position += d;
+        if (damage_.enabled()) damage_.shift(d);
+    }
     RigidBodyState& mutableState() { return body_; }
     const TelemetryFrame& telemetry() const { return telem_; }
     AssistSystem& assists() { return assists_; }

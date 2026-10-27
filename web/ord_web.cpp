@@ -1141,6 +1141,25 @@ ORD_EXPORT void ord_set_input(double steer, double throttle, double brake, doubl
 
 // Advances real time `dt` (s) in fixed 1/360 s steps. Returns the number of steps taken.
 namespace {
+struct Tunnel { bool on = false; double x = 0, y = 0, speed = 0; };
+Tunnel g_tunnelState;
+void holdInTunnel() {
+    if (!g_tunnelState.on || !g.vehicle) return;
+    const Vec3 p = g.vehicle->state().position;   // its motion, the accel estimate and its structure stay
+    g.vehicle->shiftPosition({g_tunnelState.x - p.x, g_tunnelState.y - p.y, 0});
+    // restrained at the tunnel's speed, as a car on a rolling road is: the air and the belt
+    // set the speed, not its engine
+    if (g_tunnelState.speed > 0) {
+        RigidBodyState& b = g.vehicle->mutableState();
+        Vec3 f = b.orientation.rotate({1, 0, 0});
+        f.z = 0;
+        const double fl = length(f);
+        if (fl > 1e-6) {
+            f = f / fl;
+            b.velocity += f * (g_tunnelState.speed - dot(b.velocity, f));
+        }
+    }
+}
 void stepDamaged() {
     // The crash structure handles every contact; walls break from the work its contacts do on
     // them, and the occupants ride the structure's own pulse (the step's real acceleration).
@@ -1183,6 +1202,7 @@ void stepDamaged() {
     }
     for (auto& o : g.occupant) o.step(kStep, acc);
     g.input.shiftUp = g.input.shiftDown = false;
+    holdInTunnel();
 }
 
 void stepOnce() {
@@ -1200,6 +1220,7 @@ void stepOnce() {
     g.pendingDeltaV = {};
     for (auto& o : g.occupant) o.step(kStep, acc);
     g.input.shiftUp = g.input.shiftDown = false;
+    holdInTunnel();
 }
 }  // namespace
 
@@ -1726,4 +1747,56 @@ ORD_EXPORT double* ord_cage_beams() {
         o[0] = b.a; o[1] = b.b; o[2] = b.broken ? 1 : 0; o[3] = b.plastic / std::max(b.length0, 1e-6);
     }
     return g_beams.data();
+}
+
+// ---- telemetry pages, aero geometry, wind tunnel ----
+// 16 header + 6 per wheel doubles (see web/README.md, Telemetry and wind tunnel).
+constexpr int kTelHeader = 16, kTelPerWheel = 6;
+std::array<double, kTelHeader + kTelPerWheel * kMaxWheels> g_tel{};
+ORD_EXPORT double* ord_telemetry() {
+    g_tel.fill(0);
+    if (!g.vehicle) return g_tel.data();
+    const Vehicle& v = *g.vehicle;
+    const TelemetryFrame& t = v.telemetry();
+    double* o = g_tel.data();
+    o[0] = t.rollAngle; o[1] = t.pitchAngle; o[2] = t.drivetrain.engineTorque; o[3] = t.drivetrain.driveshaftTorque;
+    o[4] = t.kineticEnergy; o[5] = t.aero.airspeed; o[6] = t.aero.downforceFront; o[7] = t.aero.downforceRear;
+    o[8] = t.aero.wingDownforce; o[9] = t.aero.drag; o[10] = t.aero.clearanceFront; o[11] = t.aero.clearanceRear;
+    o[12] = t.aero.yaw; o[13] = t.aero.wingStalled ? 1 : 0; o[14] = t.aero.floorStalled ? 1 : 0; o[15] = t.brakeInput;
+    for (std::size_t w = 0; w < t.wheelCount && w < kMaxWheels; ++w) {
+        const WheelTelemetry& wt = t.wheels[w];
+        double* q = o + kTelHeader + kTelPerWheel * w;
+        q[0] = wt.compression; q[1] = v.definition().wheels[w].suspension.travel; q[2] = wt.compressionRate;
+        q[3] = wt.temperature; q[4] = wt.camber; q[5] = wt.brakeTorque;
+    }
+    return o;
+}
+// Aero geometry for the airflow view, 24 doubles: drag area, front / rear downforce area,
+// wing span, chord, x, y, z, angle (0 span: no wing), side force area, density,
+// body box front, rear, half width, floor, roof, belt, roof rear, roof front (body frame),
+// aero floor z, ride-height reference, floor stall height, mass.
+std::array<double, 24> g_aeroInfo{};
+ORD_EXPORT double* ord_aero_info() {
+    g_aeroInfo.fill(0);
+    if (!g.vehicle) return g_aeroInfo.data();
+    const VehicleDefinition& d = g.vehicle->definition();
+    const AeroDef& a = d.aero;
+    const CageBox& b = g.vehicle->bodyBox();
+    double* o = g_aeroInfo.data();
+    o[0] = a.dragArea; o[1] = a.frontDownforceArea; o[2] = a.rearDownforceArea;
+    o[3] = a.rearWing.span; o[4] = a.rearWing.chord; o[5] = a.rearWing.position.x; o[6] = a.rearWing.position.y; o[7] = a.rearWing.position.z;
+    o[8] = a.rearWing.angle; o[9] = a.sideForceArea; o[10] = a.airDensity;
+    o[11] = b.front; o[12] = b.rear; o[13] = b.halfWidth; o[14] = b.floor; o[15] = b.roof; o[16] = b.belt; o[17] = b.roofRear; o[18] = b.roofFront;
+    o[19] = a.floorZ; o[20] = a.rideHeightRef; o[21] = a.floorStallHeight; o[22] = d.mass;
+    return o;
+}
+// Wind tunnel (a rolling road): while on, the car's horizontal position is held where it was
+// when the tunnel started, every step, and its forward speed at `speed` (m/s; 0 = its own): it
+// runs, and the air flows past it, at full physics on the same patch of ground. The wind (yaw)
+// and the steering stay the page's. Called again while on, it only changes the speed.
+ORD_EXPORT void ord_tunnel(int on, double speed) {
+    const bool was = g_tunnelState.on;
+    g_tunnelState.on = on != 0 && g.vehicle;
+    g_tunnelState.speed = speed;
+    if (g_tunnelState.on && !was) { g_tunnelState.x = g.vehicle->state().position.x; g_tunnelState.y = g.vehicle->state().position.y; }
 }

@@ -247,6 +247,8 @@ public:
     Vec3 displacementAt(const Vec3& p) const;
     // Puts the free nodes back on the body (teleports, resets): keeps the deformed shape.
     void snapToBody(const RigidBodyState& body);
+    // Moves everything by `d` (world): a host shifting its origin, a rolling road.
+    void shift(const Vec3& d);
 
 private:
     int addNode(const Vec3& p, Real invMass, CageZone z, bool skin);

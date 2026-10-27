@@ -357,5 +357,21 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   M._ord_set_damage(0);
   check('damage: off again', D()[0] === 0 && M._ord_cage_count() === 0, '');
 }
+// wind tunnel (rolling road), telemetry and the aero description
+{
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1); M._ord_create(4, 0, 0, 0);   // the race car
+  const A = new Float64Array(M.HEAPF64.buffer, M._ord_aero_info(), 24).slice();
+  check('aero info: race car (drag and downforce areas, body box, mass)', A[0] > 0.3 && A[1] + A[2] > 1 && A[11] > A[12] && A[16] > A[14] && A[22] > 500,
+        `CdA ${A[0].toFixed(2)} m², ClA F/R ${A[1].toFixed(2)}/${A[2].toFixed(2)} m², ${A[22].toFixed(0)} kg (stock: no rear wing)`);
+  M._ord_launch(0, 0, 0, 200 / 3.6, 0); M._ord_tunnel(1, 200 / 3.6);
+  for (let i = 0; i < 360 * 4; ++i) { const s = state(); M._ord_set_input(-0.3 * s[1] - 0.5 * s[9], 0, 0, 0, 0, 0); M._ord_step(1); }
+  const s = state(), T = new Float64Array(M.HEAPF64.buffer, M._ord_telemetry(), 16 + 24).slice();
+  const q = 0.5 * 1.225 * (200 / 3.6) ** 2;
+  check('wind tunnel: held in place at the tunnel speed', Math.hypot(s[0], s[1]) < 1e-6 && Math.abs(s[7] - 200 / 3.6) < 0.3, `pos ${s[0].toFixed(3)}, ${s[1].toFixed(3)}, ${(s[7] * 3.6).toFixed(1)} km/h`);
+  check('wind tunnel: telemetry downforce and drag', T[6] + T[7] > 1000 && Math.abs(T[9] / q - A[0]) < 0.1 * A[0] && T[5] > 50, `downforce ${(T[6] + T[7]).toFixed(0)} N, drag ${T[9].toFixed(0)} N (q·CdA ${(q * A[0]).toFixed(0)} N), airspeed ${T[5].toFixed(1)} m/s`);
+  M._ord_tunnel(0, 0);
+  for (let i = 0; i < 360; ++i) M._ord_step(1);
+  check('wind tunnel: off, the car moves again', state()[0] > 5, `x ${state()[0].toFixed(1)} m`);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

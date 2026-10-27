@@ -8,7 +8,7 @@ enjoyment on a gamepad and Forza Motorsport-level consequences with every aid
 off, in a giant open world.
 
 > **Status: v0.3 (October 2026).** The engine-independent core builds and
-> passes 176 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
+> passes 177 automated tests in CI on Linux (GCC, Clang, ASan/UBSan), macOS
 > (Apple Clang), Windows (MSVC) and WebAssembly. It includes unsprung mass, a
 > multi-point tire contact patch with geometric envelope probes for sharp
 > edges, a per-frame ground-query cache, host (Chaos) integration with

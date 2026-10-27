@@ -359,6 +359,14 @@ void DamageModel::snapToBody(const RigidBodyState& body) {
     quietSteps_ = 0;
 }
 
+void DamageModel::shift(const Vec3& d) {
+    for (int i = 0; i < nodeCount_; ++i) {
+        CageNode& n = nodes_[static_cast<std::size_t>(i)];
+        n.x += d;
+        n.xPrev += d;
+    }
+}
+
 Vec3 DamageModel::displacementAt(const Vec3& p) const {
     // Gaussian-weighted average of the nodes' displacements near p (anchored nodes count as zero).
     constexpr Real kSigma2 = 0.35 * 0.35;
