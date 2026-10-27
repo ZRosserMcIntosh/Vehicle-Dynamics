@@ -22,10 +22,12 @@
 #include <vector>
 
 #include "ord/assists.hpp"
+#include "ord/damage.hpp"
 #include "ord/drivetrain.hpp"
 #include "ord/ground.hpp"
 #include "ord/ground_cache.hpp"
 #include "ord/inputs.hpp"
+#include "ord/rigid_body.hpp"
 #include "ord/telemetry.hpp"
 #include "ord/tire.hpp"
 #include "ord/vehicle_def.hpp"
@@ -35,13 +37,6 @@ namespace ord {
 inline constexpr int kMaxPatchSamples = 9;
 inline constexpr int kMaxEnvelopeProbes = 3;  // per side (ahead / behind the patch)
 inline constexpr int kMaxContactSamples = kMaxPatchSamples + 2 * kMaxEnvelopeProbes;
-
-struct RigidBodyState {
-    Vec3 position;           // world position of the body origin
-    Quat orientation;        // body -> world
-    Vec3 velocity;           // world, of the centre of mass
-    Vec3 angularVelocity;    // world
-};
 
 // Per-instance cost/fidelity switches. LOD0 and LOD1 differ only here.
 struct VehicleFidelity {
@@ -144,11 +139,35 @@ public:
     // drive ratio is kept. Returns false for a bad index or out-of-range values.
     bool setDifferential(std::size_t drivenAxle, const DifferentialDef& d);
 
+    // ---- Damage (damage.hpp) ----
+    // Builds the crash structure for this car and turns damage on. Off by default: a car
+    // without it behaves exactly as before (rigid body, body hull). With the structure on, its
+    // nodes are the car's collision hull against the ground and the host's obstacles, and the
+    // structure is solved after each step's chassis integration (ChassisMode::Internal only;
+    // with an external chassis the cage is not stepped).
+    bool enableDamage(const DamageConfig& cfg = {});
+    void disableDamage();
+    bool damageEnabled() const { return damage_.enabled(); }
+    const DamageModel& damage() const { return damage_; }
+    const DamageState& damageState() const { return damage_.state(); }
+    // Back to new: shape, wheels, tyres, steering, engine.
+    void repairDamage();
+    // Static obstacles for the crash structure (walls, posts). Not owned; may be null.
+    void setObstacles(const ObstacleQuery* obstacles) { obstacles_ = obstacles; }
+    // The body box the hull and the crash structure are built from (body frame).
+    const CageBox& bodyBox() const { return cageBox_; }
+
     // ---- Accessors ----
     const VehicleDefinition& definition() const { return def_; }
     const VehicleFidelity& fidelity() const { return fidelity_; }
     void setFidelity(const VehicleFidelity& f);
     const RigidBodyState& state() const { return body_; }
+    // Translates the car (and its crash structure) by `d` without touching its motion: a host
+    // moving its world origin, a rolling road holding the car in place.
+    void shiftPosition(const Vec3& d) {
+        body_.position += d;
+        if (damage_.enabled()) damage_.shift(d);
+    }
     RigidBodyState& mutableState() { return body_; }
     const TelemetryFrame& telemetry() const { return telem_; }
     AssistSystem& assists() { return assists_; }
@@ -218,6 +237,8 @@ private:
 
     void computeStep(Real dt, const DriverInput& input, const GroundQuery& ground);
     void integrateChassis(Real dt, const Vec3& extraForce = {});
+    void refreshBodyTelemetry(Real dt);
+    void stepDamage(Real dt, const RigidBodyState& before, const GroundQuery& ground);
     void updateAccelEstimate(const Vec3& vNew, const Vec3& wNew, Real dt);
     VehicleSensors buildSensors(Real dt) const;
     Real wheelSteerAngle(std::size_t w, Real refAngle) const;
@@ -257,6 +278,16 @@ private:
     std::array<Real, kMaxWheels> kinDroopS_{};         // spring deflection at full droop (wheel metres)
     Vec3 wind_{};
     AeroTelemetry aeroTel_;
+    // Damage
+    void applyTyreDamage();
+    DamageModel damage_;
+    const ObstacleQuery* obstacles_ = nullptr;
+    CageBox cageBox_;
+    std::array<Vec3, kMaxWheels> shoulder_{};
+    std::array<TireParams, kMaxWheels> intactTire_{};
+    std::array<Real, kMaxWheels> appliedDeflation_{};
+    std::array<Real, kMaxWheels> tyreDeflection_{};
+    bool cageGroundGate_ = false;
     // Body collision hull (see BodyDef): points in the body frame, built once.
     static constexpr int kHullPoints = 17 + kMaxWheels;  // body box + one tyre shoulder per wheel
     std::array<Vec3, kHullPoints> hull_{};

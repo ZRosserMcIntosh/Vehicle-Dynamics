@@ -152,14 +152,72 @@ Vehicle::Vehicle(const VehicleDefinition& def, const AssistConfig& assists, cons
             const Real wcz = hp.z - (wd.suspension.travel - rideCompression_[w]);
             const Real side = hp.y >= 0 ? 1.0 : -1.0;
             hull_[static_cast<std::size_t>(k++)] = {hp.x, hp.y + side * 0.12, wcz - 0.7 * wd.tire.radius};
+            shoulder_[w] = hull_[static_cast<std::size_t>(k - 1)];
         }
         hullCount_ = k;
+        cageBox_ = {front, rear, hw, floor, roof, belt, rr, rf};
     }
     setFidelity(fidelity_);
 }
 
 void Vehicle::setTyreTemperatures(Real celsius) {
     for (auto& ws : wheels_) ws.temperature = celsius;
+}
+
+bool Vehicle::enableDamage(const DamageConfig& cfg) {
+    if (!valid_) return false;
+    const std::size_t nw = def_.wheels.size();
+    std::array<Vec3, kMaxWheels> mounts{};
+    std::array<Real, kMaxWheels> load{};
+    staticWheelLoads(load);
+    for (std::size_t w = 0; w < nw; ++w) {
+        mounts[w] = def_.wheels[w].suspension.hardpoint;
+        intactTire_[w] = def_.wheels[w].tire;
+        appliedDeflation_[w] = 0;
+    }
+    DamageConfig c = cfg;
+    c.strength *= def_.body.structureStrength;  // armoured cars carry their own factor
+    if (def_.body.runFlatTyres) c.maxDeflation = std::min(c.maxDeflation, 0.25);
+    damage_.build(c, cageBox_, def_.mass, nw, mounts, shoulder_, load, def_.aero.ambientTemperature);
+    damage_.snapToBody(body_);
+    drivetrain_.setEngineDamage(1, false);
+    return true;
+}
+
+void Vehicle::disableDamage() {
+    repairDamage();
+    damage_.disable();
+}
+
+void Vehicle::repairDamage() {
+    if (!damage_.enabled()) return;
+    damage_.repair(def_.aero.ambientTemperature);
+    for (std::size_t w = 0; w < def_.wheels.size(); ++w) {
+        def_.wheels[w].tire = intactTire_[w];
+        tires_[w] = MagicFormulaTire(intactTire_[w]);
+        appliedDeflation_[w] = 0;
+    }
+    drivetrain_.setEngineDamage(1, false);
+    damage_.snapToBody(body_);
+}
+
+// A punctured tyre going flat: it rides on the rim (radius down ~18%), its vertical stiffness
+// and grip collapse and it drags. Applied as the tyre's parameters, rebuilt when it changes.
+void Vehicle::applyTyreDamage() {
+    const DamageState& ds = damage_.state();
+    for (std::size_t w = 0; w < def_.wheels.size(); ++w) {
+        const Real d = ds.wheels[w].deflation;
+        if (std::abs(d - appliedDeflation_[w]) < 0.01 && !(d >= 1 && appliedDeflation_[w] < 1)) continue;
+        TireParams p = intactTire_[w];
+        p.radius -= d * 0.18 * p.radius;
+        p.verticalStiffness *= 1 - 0.85 * d;
+        p.muX *= 1 - 0.45 * d;
+        p.muY *= 1 - 0.45 * d;
+        p.rollingResistance *= 1 + 10 * d;
+        def_.wheels[w].tire = p;
+        tires_[w] = MagicFormulaTire(p);
+        appliedDeflation_[w] = d;
+    }
 }
 
 void Vehicle::setFidelity(const VehicleFidelity& f) {
@@ -392,6 +450,7 @@ void Vehicle::placeOnGround(Real x, Real y, Real yaw, const GroundQuery& ground,
     prevVelocity_ = body_.velocity;
     prevAngularVelocity_ = body_.angularVelocity;
     accel_ = angAccel_ = {};
+    if (damage_.enabled()) damage_.snapToBody(body_);
 }
 
 void Vehicle::reset(const Vec3& position, Real yaw, const GroundQuery& ground) {
@@ -530,6 +589,7 @@ void Vehicle::step(Real dt, const DriverInput& input, const GroundQuery& ground)
     const RigidBodyState before = body_;
     computeStep(dt, input, ground);
     if (chassisMode_ == ChassisMode::Internal) integrateChassis(dt);
+    if (damage_.enabled() && chassisMode_ == ChassisMode::Internal) stepDamage(dt, before, ground);
     if (!stateFinite()) {
         body_ = before;
         forces_ = {};
@@ -538,6 +598,42 @@ void Vehicle::step(Real dt, const DriverInput& input, const GroundQuery& ground)
     }
     time_ += dt;
     lastDt_ = dt;
+}
+
+void Vehicle::stepDamage(Real dt, const RigidBodyState& before, const GroundQuery& ground) {
+    if (damage_.config().structure) {
+        DamageModel::BodyParams bp;
+        bp.mass = def_.mass;
+        bp.invInertia = {1.0 / def_.inertia.x, 1.0 / def_.inertia.y, 1.0 / def_.inertia.z};
+        bp.com = def_.centerOfMass;
+        bp.bodyFriction = def_.body.friction;
+        const Vec3 v0 = body_.velocity, w0 = body_.angularVelocity;
+        if (damage_.stepStructure(dt, body_, before, bp, ground, obstacles_, cageGroundGate_, groundQueries_)) {
+            // the structure's contact and crush corrections are part of this step's acceleration
+            accel_ += (body_.velocity - v0) / dt;
+            angAccel_ += (body_.angularVelocity - w0) / dt;
+            prevVelocity_ = body_.velocity;
+            prevAngularVelocity_ = body_.angularVelocity;
+            refreshBodyTelemetry(dt);
+            if (fidelity_.telemetry) telem_.accelBody = body_.orientation.inverseRotate(accel_);
+        }
+        bodyContacts_ = damage_.state().nodeContacts;
+        bodyContactForce_ = damage_.contactForce();
+        telem_.bodyContacts = bodyContacts_;
+        telem_.bodyContactForce = bodyContactForce_;
+        telem_.groundQueries = groundQueries_;
+    }
+    if (damage_.config().mechanical) {
+        std::array<Real, kMaxWheels> load{}, speed{};
+        for (std::size_t w = 0; w < def_.wheels.size(); ++w) {
+            load[w] = wheels_[w].load;
+            speed[w] = wheels_[w].contactVx;
+        }
+        const bool running = drivetrain_.engineOmega() > rpmToRadS(300.0);
+        damage_.stepMechanical(dt, load, tyreDeflection_, speed, lastCmd_.throttle, running, def_.aero.ambientTemperature);
+        drivetrain_.setEngineDamage(damage_.state().torqueScale, damage_.state().engineSeized);
+        applyTyreDamage();
+    }
 }
 
 void Vehicle::stepSubstepped(Real hostDt, int substeps, const DriverInput& input, const GroundQuery& ground) {
@@ -607,7 +703,10 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         // has scrubbed to, and the direction it moves per metre of compression
         // (the generalised direction of this wheel's DOF). Sliders: no scrub, +up.
         const LinkagePose pose = linkagePose(w, ws.compression);
-        const Vec3 hp = body_.position + q.rotate(sd.hardpoint + Vec3{pose.lon, side * pose.lat, 0});
+        const bool dmg = damage_.enabled() && damage_.config().mechanical;
+        const WheelDamage* wdmg = dmg ? &damage_.state().wheels[w] : nullptr;
+        const Vec3 mount = wdmg ? wdmg->mountOffset : Vec3{};
+        const Vec3 hp = body_.position + q.rotate(sd.hardpoint + mount + Vec3{pose.lon, side * pose.lat, 0});
         const Vec3 dof = q.rotate({pose.dLon, side * pose.dLat, 1.0});
         const Real dof2 = dot(dof, dof);
         ws.dofDir = dof;
@@ -616,11 +715,18 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         // radian. Forces at the patch do their work along this direction; it is
         // what the front-view roll centre encodes.
         const Vec3 dofPatch = q.rotate({pose.dLon, side * (pose.dLat - r * pose.dCamber), 1.0});
-        ws.steer = wheelSteerAngle(w, cmd.steerAngle);
+        {
+            Real ref = cmd.steerAngle;
+            if (dmg && wd.maxSteerAngle > 0) ref = ref * damage_.state().steeringLock + damage_.state().steeringOffset;
+            ws.steer = wheelSteerAngle(w, ref);
+            if (wdmg) ws.steer += wdmg->toe + (wd.isLeft ? 1.0 : -1.0) * wdmg->bend;  // bends go toe-out
+        }
+        const bool detached = wdmg && wdmg->detached;
         const Vec3 headingWorld = q.rotate({std::cos(ws.steer), std::sin(ws.steer), 0});
         ws.hit = GroundHit{};
         int patchCount = 1;
-        const int n = sampleContact(w, hp, up, headingWorld, ground, samples, patchCount);
+        if (detached) samples[0] = Sample{};
+        const int n = detached ? 0 : sampleContact(w, hp, up, headingWorld, ground, samples, patchCount);
         const Real weight = 1.0 / patchCount;
         // A car tilted far over (past ~53 degrees) rests on the tyre's sidewall,
         // not on a point found straight "down" its own axis, which by then lies well off to the
@@ -795,6 +901,18 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             dbg.wheelCenter = hp - up * (sd.travel - x);
             ws.wheelCenter = dbg.wheelCenter;
         }
+        if (detached) {  // the wheel is gone: nothing reaches the body through this corner
+            ws.contact = false;
+            ws.tireNormalForce = {};
+            ws.relativeAccel = 0;
+            ws.springForce = 0;
+        }
+        {
+            Real defl = 0;
+            for (int k = 0; k < n; ++k)
+                if (!samples[static_cast<std::size_t>(k)].probe) defl = std::max(defl, ws.prevPen[static_cast<std::size_t>(k)]);
+            tyreDeflection_[w] = usesUnsprung(w) ? defl : 0.0;
+        }
         if (!ws.contact) {
             ws.load = 0;
             ws.normal = up;
@@ -811,7 +929,7 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             // Wheel inclination to the road: static camber + gain with
             // compression + caster with steer, through the body's roll.
             const Real camberKin = linkage_[w].valid() ? pose.camber : wd.camberGain * (ws.compression - rideCompression_[w]);
-            Real g = side * (wd.staticCamber + camberKin);
+            Real g = side * (wd.staticCamber + camberKin) + (wdmg ? wdmg->camber : 0.0);
             if (wd.maxSteerAngle > 0) g += std::sin(wd.casterAngle) * std::sin(ws.steer);
             const Real cs = std::cos(ws.steer), sn = std::sin(ws.steer);
             const Vec3 axle = q.rotate({-sn * std::cos(g), cs * std::cos(g), -std::sin(g)});
@@ -937,8 +1055,10 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         const Vec3 vAir = body_.velocity - wind_;
         const Real vmag = length(vAir);
         at.airspeed = vmag;
-        force += vAir * (-0.5 * aero.airDensity * aero.dragArea * vmag);
-        at.drag = 0.5 * aero.airDensity * aero.dragArea * vmag * vmag;
+        const bool aeroDmg = damage_.enabled() && damage_.config().mechanical;
+        const Real dragArea = aero.dragArea * (aeroDmg ? damage_.state().dragScale : 1.0);
+        force += vAir * (-0.5 * aero.airDensity * dragArea * vmag);
+        at.drag = 0.5 * aero.airDensity * dragArea * vmag * vmag;
         const Vec3 vb = q.inverseRotate(vAir);
         const Real yaw = (vb.x > 0.5) ? std::atan2(vb.y, vb.x) : 0.0;
         at.yaw = yaw;
@@ -1002,7 +1122,7 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             const WingSectionResult sec = evaluateWingSection(wing.polar, wing.angle - flowDown, liftCurveSlope3D(ar, wing.polar.liftSlope));
             const Real S = wing.span * wing.chord;
             const Real cdi = sec.cl * sec.cl / (kPi * wing.efficiency * ar);
-            const Real down = qDyn * S * sec.cl * yawFactor;
+            const Real down = qDyn * S * sec.cl * yawFactor * (aeroDmg ? damage_.state().wingScale : 1.0);
             const Real dragW = qDyn * S * (sec.cd + cdi);
             const Vec3 pw = body_.position + q.rotate(wing.position);
             const Vec3 fw = -up * down + (vmag > 0.1 ? vAir * (-dragW / vmag) : Vec3{});
@@ -1024,7 +1144,10 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
     {
         bool anyWheel = false;
         for (std::size_t w = 0; w < nw; ++w) anyWheel = anyWheel || wheels_[w].contact;
-        if (up.z < 0.86 || !anyWheel) {
+        cageGroundGate_ = up.z < 0.86 || !anyWheel;
+        // with the crash structure on, its nodes are the hull (solved after the integration)
+        const bool cage = damage_.enabled() && damage_.config().structure && chassisMode_ == ChassisMode::Internal;
+        if (cageGroundGate_ && !cage) {
             const Real kPt = def_.mass * 600.0;                            // N/m per point
             const Real cPt = 2.0 * 0.6 * std::sqrt(kPt * def_.mass / 6.0);  // ~0.6 of critical, ~6 points in contact
             const Mat3 R = q.toMatrix();
@@ -1091,7 +1214,10 @@ void Vehicle::integrateChassis(Real dt, const Vec3& extraForce) {
     body_.orientation.normalize();
     body_.position = newCom - body_.orientation.rotate(def_.centerOfMass);
     updateAccelEstimate(body_.velocity, body_.angularVelocity, dt);
+    refreshBodyTelemetry(dt);
+}
 
+void Vehicle::refreshBodyTelemetry(Real dt) {
     if (fidelity_.telemetry) {
         telem_.position = body_.position;
         const Vec3 vb = bodyVelocity();

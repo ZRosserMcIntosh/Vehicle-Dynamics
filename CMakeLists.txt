@@ -39,6 +39,7 @@ add_library(ord_core
   src/core/src/single_track.cpp
   src/core/src/two_wheeler.cpp
   src/core/src/crash.cpp
+  src/core/src/damage.cpp
   src/core/src/aero.cpp
   src/core/src/kinematics.cpp
   src/core/src/setup.cpp

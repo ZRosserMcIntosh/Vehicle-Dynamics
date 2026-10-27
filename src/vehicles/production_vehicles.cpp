@@ -205,6 +205,8 @@ VehicleDefinition mercedesS600Guard() {
     d.name = "Mercedes-Benz S 600 Guard (W222)";
     d.mass = 4160;                   // published kerb weight ~4.16 t (VR9 armour, ~2 t over an S 600)
     d.inertia = {2100, 8600, 9000};  // est.: armour in the doors, roof and floor
+    d.body.structureStrength = 1.8;  // est.: an armoured cell, doors and roof (crash structure)
+    d.body.runFlatTyres = true;      // Michelin PAX run-flats (published)
     const Real frontShare = 0.52;    // est.
     WheelDef f;
     // Michelin PAX run-flat tyres (published); size not published, a 19-inch touring tyre est.

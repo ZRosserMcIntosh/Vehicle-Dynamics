@@ -295,5 +295,83 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   }
   check('stunt park: the clothoid loop goes all the way round', round && state()[23] === 0, `${top.toFixed(1)} m loop, top reached ${zMax.toFixed(1)} m`);
 }
+// damage: the node/beam crash structure on the barrier, a storefront it breaks, repair
+{
+  const D = () => new Float64Array(M.HEAPF64.buffer, M._ord_damage_state(), 22 + 6 * 8).slice();
+  const occ = () => new Float64Array(M.HEAPF64.buffer, M._ord_occupant_state(0), 24).slice();
+  const CY = M._ord_crash_lane_y(), BX = M._ord_crash_barrier_x();
+  M._ord_set_preset(2); M._ord_set_aids(0, 0, 0, 1);
+  M._ord_create(6, BX - 30, CY, 0);
+  M._ord_set_damage(1);
+  check('damage: structure on', D()[0] === 1 && M._ord_cage_count() > 50 && M._ord_cage_beam_count() > 200, `${M._ord_cage_count()} nodes, ${M._ord_cage_beam_count()} beams`);
+  M._ord_launch(BX - 6, CY, 0, 56 / 3.6, 0);
+  let peak = 0, prev = 56 / 3.6;
+  for (let i = 0; i < 720; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); const v = state()[7]; peak = Math.max(peak, (prev - v) * 360 / 9.81); prev = v; }
+  const d = D(), o = occ();
+  check('damage: 56 km/h into the barrier crushes ~0.5 m; the dummies ride the structure\'s pulse', d[3] > 0.35 && d[3] < 0.8 && peak > 15 && peak < 50 && o[7] === 1 && o[8] === 1 && state()[23] === 0,
+        `crush ${d[3].toFixed(2)} m, peak ${peak.toFixed(0)} g, report: zone ${o[8]}, delta-V ${(o[9] * 3.6).toFixed(0)} km/h, chest ${o[13].toFixed(0)} g, radiator ${d[11].toFixed(2)}`);
+  const nodes = new Float64Array(M.HEAPF64.buffer, M._ord_cage_nodes(), 8 * M._ord_cage_count()).slice();
+  let moved = 0; for (let i = 0; i < M._ord_cage_count(); ++i) moved = Math.max(moved, nodes[8 * i] - nodes[8 * i + 3]);
+  check('damage: the node buffer shows the crushed shape', Math.abs(moved - d[3]) < 0.05, `front node moved back ${moved.toFixed(2)} m`);
+  M._ord_repair();
+  check('damage: repair', D()[3] === 0 && D()[11] === 0, '');
+  // the glass storefront: the structure's contact work breaks it, the car goes through
+  M._ord_reset_obstacles();
+  const SY = M._ord_smash_lane_y(0);
+  M._ord_launch(BX - 8, SY, 0, 30 / 3.6, 0);
+  let broke = 0;
+  for (let i = 0; i < 720; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); broke += M._ord_break_events(); }
+  check('damage: the structure breaks the glass storefront and carries on', broke >= 1 && state()[0] > BX + 1 && state()[7] > 4, `${broke} pane(s), ${(state()[7] * 3.6).toFixed(0)} km/h after`);
+  // a scrape along the barrier at 4 degrees is not a crash: no report for the dummies
+  M._ord_set_preset(1); M._ord_create(6, BX - 30, CY, 0); M._ord_set_damage(1);
+  const reports0 = occ()[6];
+  M._ord_launch(BX - 1.6, CY - 12, Math.PI / 2 - 4 * Math.PI / 180, 50 / 3.6, 0);
+  for (let i = 0; i < 360 * 3; ++i) { M._ord_set_input(0, 0.3, 0, 0, 0, 0); M._ord_step(1); }
+  for (let i = 0; i < 360; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); }
+  check('damage: scraping a wall is not a crash', occ()[6] === reports0 && state()[23] === 0, `${occ()[6] - reports0} report(s)`);
+  // the stunt park with damage on: the kicker lands clean, the loop goes round (no launch)
+  const A2 = new Float64Array(M.HEAPF64.buffer, M._ord_test_areas(), 35).slice();
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1); M._ord_create(6, -460, A2[11], 0); M._ord_set_damage(1);
+  M._ord_launch(-460, A2[11], 0, 80 / 3.6, 0);
+  for (let i = 0; i < 360 * 14; ++i) { const s = state(); M._ord_set_input(-0.2 * (s[1] - A2[11]), Math.max(0, Math.min(1, (80 / 3.6 - s[7]) * 0.5)), 0, 0, 0, 0); M._ord_step(1); }
+  check('damage: the kicker lands without damage', D()[9] < 500 && state()[23] === 0, `${D()[9].toFixed(0)} J absorbed`);
+  {
+    const nP = M._ord_loop_profile_count(), prof = new Float64Array(M.HEAPF64.buffer, M._ord_loop_profile(), 4 * nP).slice();
+    const len = prof[4 * (nP - 1) + 3];
+    const x0 = -420, y0 = A2[30] - (A2[29] - x0) * Math.tan(A2[34]);
+    M._ord_create(6, x0, y0, A2[34]); M._ord_set_damage(1); M._ord_launch(x0, y0, A2[34], 105 / 3.6, 0);
+    let sPrev = 0, zMax = 0;
+    for (let i = 0; i < 360 * 14; ++i) {
+      const s = state(); let steer = 0;
+      if (s[0] > A2[29] - 2 && s[1] > A2[30] - 4) {
+        let best = 1e9, sa = -1;
+        for (let k = 0; k < nP; ++k) { const sk = prof[4 * k + 3]; if (Math.abs(sk - sPrev) > 6) continue; const dx = A2[29] + prof[4 * k] - s[0], dz = prof[4 * k + 1] - s[2], dd = dx * dx + dz * dz; if (dd < best) { best = dd; sa = sk; } }
+        if (sa >= 0) { sPrev = sa; const yc = A2[30] + A2[32] * sa / len; const r10 = 2 * (s[4] * s[5] + s[3] * s[6]), r11 = 1 - 2 * (s[4] * s[4] + s[6] * s[6]); const vy = r10 * s[7] + r11 * s[8]; steer = Math.max(-0.3, Math.min(0.3, 0.25 * (yc - s[1]) - 0.25 * (vy - Math.abs(s[7]) * Math.sin(A2[34])))); }
+      }
+      M._ord_set_input(steer, s[0] < A2[29] - 5 ? Math.max(0, Math.min(1, (105 / 3.6 - s[7]) * 0.5)) : 1, 0, 0, 0, 0); M._ord_step(1);
+      zMax = Math.max(zMax, state()[2]);
+    }
+    check('damage: the loop with the crash structure on (no launch, no broken parts)', zMax > 30 && zMax < 40 && D()[9] < 5000 && [0, 1, 2, 3].every((w) => !D()[22 + 6 * w + 3]) && state()[23] === 0,
+          `top ${zMax.toFixed(1)} m, ${D()[9].toFixed(0)} J (the overhangs scrape the entry)`);
+  }
+  M._ord_set_damage(0);
+  check('damage: off again', D()[0] === 0 && M._ord_cage_count() === 0, '');
+}
+// wind tunnel (rolling road), telemetry and the aero description
+{
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1); M._ord_create(4, 0, 0, 0);   // the race car
+  const A = new Float64Array(M.HEAPF64.buffer, M._ord_aero_info(), 24).slice();
+  check('aero info: race car (drag and downforce areas, body box, mass)', A[0] > 0.3 && A[1] + A[2] > 1 && A[11] > A[12] && A[16] > A[14] && A[22] > 500,
+        `CdA ${A[0].toFixed(2)} m², ClA F/R ${A[1].toFixed(2)}/${A[2].toFixed(2)} m², ${A[22].toFixed(0)} kg (stock: no rear wing)`);
+  M._ord_launch(0, 0, 0, 200 / 3.6, 0); M._ord_tunnel(1, 200 / 3.6);
+  for (let i = 0; i < 360 * 4; ++i) { const s = state(); M._ord_set_input(-0.3 * s[1] - 0.5 * s[9], 0, 0, 0, 0, 0); M._ord_step(1); }
+  const s = state(), T = new Float64Array(M.HEAPF64.buffer, M._ord_telemetry(), 16 + 24).slice();
+  const q = 0.5 * 1.225 * (200 / 3.6) ** 2;
+  check('wind tunnel: held in place at the tunnel speed', Math.hypot(s[0], s[1]) < 1e-6 && Math.abs(s[7] - 200 / 3.6) < 0.3, `pos ${s[0].toFixed(3)}, ${s[1].toFixed(3)}, ${(s[7] * 3.6).toFixed(1)} km/h`);
+  check('wind tunnel: telemetry downforce and drag', T[6] + T[7] > 1000 && Math.abs(T[9] / q - A[0]) < 0.1 * A[0] && T[5] > 50, `downforce ${(T[6] + T[7]).toFixed(0)} N, drag ${T[9].toFixed(0)} N (q·CdA ${(q * A[0]).toFixed(0)} N), airspeed ${T[5].toFixed(1)} m/s`);
+  M._ord_tunnel(0, 0);
+  for (let i = 0; i < 360; ++i) M._ord_step(1);
+  check('wind tunnel: off, the car moves again', state()[0] > 5, `x ${state()[0].toFixed(1)} m`);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

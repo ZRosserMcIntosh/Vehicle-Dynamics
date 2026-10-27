@@ -121,6 +121,11 @@ public:
     // Adds an impact: `deltaV` (body frame, the car's velocity change) as a
     // crush pulse per axis. Returns the zone it was assigned to.
     ImpactZone impact(const Vec3& deltaV);
+    // A measured impact: the vehicle's own crash structure (damage.hpp) produced the pulse,
+    // which reaches the occupant through step()'s acceleration. Records the impact's speed
+    // change (body frame), zone and intrusion into the cabin (m) for the report, without
+    // adding a synthesised pulse. Call it as the speed change accumulates (any number of times).
+    void recordImpact(const Vec3& deltaV, Real intrusion);
     // Advances `dt` with the vehicle's body-frame acceleration (m/s^2).
     void step(Real dt, const Vec3& vehicleAccel);
 

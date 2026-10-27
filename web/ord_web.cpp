@@ -540,12 +540,121 @@ struct Sim {
     OccupantSim occupant[2];
     OccupantDef occupantDef[2];
     Vec3 pendingDeltaV{};  // collision speed change this step, body frame
+    // Damage mode (ord_set_damage): 0 = the crash model's impulses (the page draws its own
+    // dents), 1 = the node/beam crash structure and mechanical damage (damage.hpp).
+    int damageMode = 0;
     InjuryReport riderReport;
     std::uint32_t riderReports = 0;
 };
 
 Sim g;
 constexpr Real kStep = 1.0 / 360.0;
+
+// The demo's walls and posts for the crash structure (damage.hpp). Segments are thin walls with
+// a height range; a node is in one if it has crossed it from the side the car's centre is on.
+// Circles are posts and trees. Segment ids are their index; circles are 100000 + index.
+struct WebObstacles final : ObstacleQuery {
+    static constexpr int kCircleId = 100000;
+    template <class F>
+    void forCells(double x0, double y0, double x1, double y1, F&& f) const {
+        const Colliders& c = g.col;
+        if (c.grid.empty()) return;
+        const int i0 = std::clamp(static_cast<int>((std::min(x0, x1) - c.gx0) / c.gcell), 0, c.gn - 1);
+        const int i1 = std::clamp(static_cast<int>((std::max(x0, x1) - c.gx0) / c.gcell), 0, c.gn - 1);
+        const int j0 = std::clamp(static_cast<int>((std::min(y0, y1) - c.gy0) / c.gcell), 0, c.gn - 1);
+        const int j1 = std::clamp(static_cast<int>((std::max(y0, y1) - c.gy0) / c.gcell), 0, c.gn - 1);
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i)
+                for (int id : c.grid[static_cast<std::size_t>(j) * c.gn + i]) f(id);
+    }
+    bool anyNear(const Vec3& p, Real r) const override {
+        bool near = false;
+        forCells(p.x - r, p.y - r, p.x + r, p.y + r, [&](int id) {
+            if (near) return;
+            if (id >= 0) {
+                const auto& s = g.col.segs[static_cast<std::size_t>(id)];
+                if (s.broken || p.z + r < s.z0 || p.z - r > s.z1) return;
+                const double sx = s.bx - s.ax, sy = s.by - s.ay, l2 = sx * sx + sy * sy;
+                const double t = l2 > 1e-12 ? std::clamp(((p.x - s.ax) * sx + (p.y - s.ay) * sy) / l2, 0.0, 1.0) : 0.0;
+                near = std::hypot(p.x - s.ax - sx * t, p.y - s.ay - sy * t) < r;
+            } else {
+                const auto& c = g.col.circs[static_cast<std::size_t>(~id)];
+                near = p.z + r >= c.z0 && p.z - r <= c.z1 && std::hypot(p.x - c.x, p.y - c.y) < r + c.r;
+            }
+        });
+        return near;
+    }
+    ObstacleContact point(const Vec3& p, const Vec3& ref, Real margin) const override {
+        ObstacleContact best;
+        best.depth = -1e9;
+        forCells(p.x - 0.5, p.y - 0.5, p.x + 0.5, p.y + 0.5, [&](int id) {
+            if (id >= 0) {
+                const auto& s = g.col.segs[static_cast<std::size_t>(id)];
+                if (s.broken || p.z < s.z0 - 0.05 || p.z > s.z1) return;
+                const double sx = s.bx - s.ax, sy = s.by - s.ay, l = std::hypot(sx, sy);
+                if (l < 1e-6) return;
+                const double ux = sx / l, uy = sy / l;
+                const double t = (p.x - s.ax) * ux + (p.y - s.ay) * uy;
+                if (t < 0 || t > l) return;
+                const double side = ux * (p.y - s.ay) - uy * (p.x - s.ax);        // + left of a->b
+                const double sideRef = ux * (ref.y - s.ay) - uy * (ref.x - s.ax);
+                const double sg = sideRef >= 0 ? 1.0 : -1.0;
+                const double depth = -side * sg;  // > 0 once the point has crossed to the far side
+                if (depth < -margin || depth > 1.0 || depth <= best.depth) return;
+                best.hit = true; best.depth = depth; best.normal = {-uy * sg, ux * sg, 0}; best.friction = 0.35; best.id = id;
+            } else {
+                const auto& c = g.col.circs[static_cast<std::size_t>(~id)];
+                if (p.z < c.z0 || p.z > c.z1) return;
+                const double dx = p.x - c.x, dy = p.y - c.y, d = std::hypot(dx, dy);
+                const double depth = c.r - d;
+                if (d < 1e-9 || depth < -margin || depth <= best.depth) return;
+                best.hit = true; best.depth = depth; best.normal = {dx / d, dy / d, 0}; best.friction = 0.35; best.id = kCircleId + ~id;
+            }
+        });
+        return best;
+    }
+    // Posts, trees and wall ends poking between the structure's nodes.
+    ObstacleContact edge(const Vec3& a, const Vec3& b, Real margin, Real& t) const override {
+        ObstacleContact best;
+        best.depth = -1e9;
+        const double ex = b.x - a.x, ey = b.y - a.y, l2 = ex * ex + ey * ey;
+        if (l2 < 1e-12) return best;
+        const double z = 0.5 * (a.z + b.z);
+        auto test = [&](double cx, double cy, double r, double z0, double z1, int id) {
+            if (z < z0 || z > z1) return;
+            const double tt = std::clamp(((cx - a.x) * ex + (cy - a.y) * ey) / l2, 0.0, 1.0);
+            const double qx = a.x + ex * tt, qy = a.y + ey * tt, dx = qx - cx, dy = qy - cy, d = std::hypot(dx, dy);
+            const double depth = r - d;
+            if (d < 1e-9 || depth < -margin || depth <= best.depth) return;
+            best.hit = true; best.depth = depth; best.normal = {dx / d, dy / d, 0}; best.friction = 0.35; best.id = id; t = tt;
+        };
+        forCells(std::min(a.x, b.x) - 0.5, std::min(a.y, b.y) - 0.5, std::max(a.x, b.x) + 0.5, std::max(a.y, b.y) + 0.5, [&](int id) {
+            if (id >= 0) {
+                const auto& s = g.col.segs[static_cast<std::size_t>(id)];
+                if (s.broken) return;
+                test(s.ax, s.ay, 0.04, s.z0 - 0.05, s.z1, id);
+                test(s.bx, s.by, 0.04, s.z0 - 0.05, s.z1, id);
+            } else {
+                const auto& c = g.col.circs[static_cast<std::size_t>(~id)];
+                test(c.x, c.y, c.r, c.z0, c.z1, kCircleId + ~id);
+            }
+        });
+        return best;
+    }
+};
+WebObstacles g_obstacles;
+
+// Crash structure on the player's car when the damage mode asks for it (after every rebuild).
+void applyDamage() {
+    if (!g.vehicle) return;
+    if (g.damageMode != 1) {
+        if (g.vehicle->damageEnabled()) g.vehicle->disableDamage();
+        g.vehicle->setObstacles(nullptr);
+        return;
+    }
+    g.vehicle->enableDamage(DamageConfig{});   // per-car strength and run-flats come from the definition
+    g.vehicle->setObstacles(&g_obstacles);
+}
 // Rewind: snapshots of everything a step changes, newest last (see ord_snap_push).
 struct Snapshot {
     std::optional<Vehicle> vehicle, shadow;
@@ -971,6 +1080,7 @@ ORD_EXPORT int ord_create(int carIndex, double x, double y, double yaw) {
     g.vehicle->reset({x, y, groundHeight(x, y) + 1.0}, yaw, *g.ground);
     g.vehicle->setWind(g.wind);
     if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
+    applyDamage();
     g.accumulator = 0;
     g.input = {};
     publish();
@@ -1031,7 +1141,72 @@ ORD_EXPORT void ord_set_input(double steer, double throttle, double brake, doubl
 
 // Advances real time `dt` (s) in fixed 1/360 s steps. Returns the number of steps taken.
 namespace {
+struct Tunnel { bool on = false; double x = 0, y = 0, speed = 0; };
+Tunnel g_tunnelState;
+void holdInTunnel() {
+    if (!g_tunnelState.on || !g.vehicle) return;
+    const Vec3 p = g.vehicle->state().position;   // its motion, the accel estimate and its structure stay
+    g.vehicle->shiftPosition({g_tunnelState.x - p.x, g_tunnelState.y - p.y, 0});
+    // restrained at the tunnel's speed, as a car on a rolling road is: the air and the belt
+    // set the speed, not its engine
+    if (g_tunnelState.speed > 0) {
+        RigidBodyState& b = g.vehicle->mutableState();
+        Vec3 f = b.orientation.rotate({1, 0, 0});
+        f.z = 0;
+        const double fl = length(f);
+        if (fl > 1e-6) {
+            f = f / fl;
+            b.velocity += f * (g_tunnelState.speed - dot(b.velocity, f));
+        }
+    }
+}
+void stepDamaged() {
+    // The crash structure handles every contact; walls break from the work its contacts do on
+    // them, and the occupants ride the structure's own pulse (the step's real acceleration).
+    Vehicle& v = *g.vehicle;
+    const Vec3 vBefore = v.state().velocity;
+    v.step(kStep, g.input, *g.ground);
+    if (g.shadow && !g.shadow->faulted()) g.shadow->step(kStep, g.input, *g.ground);
+    const DamageModel& dm = v.damage();
+    Vec3 contactDv{};  // the speed change the obstacles' contact impulses made this step (world)
+    for (int i = 0; i < dm.impactCount(); ++i) {
+        const ObstacleImpact& im = dm.impact(i);
+        contactDv += im.normal * (im.impulse / v.definition().mass);
+        g.impact = std::max(g.impact, im.closingSpeed);
+        int kind = im.id >= WebObstacles::kCircleId ? 1 : 0;
+        if (im.id >= 0 && im.id < static_cast<int>(g.col.segs.size())) {
+            auto& sg = g.col.segs[static_cast<std::size_t>(im.id)];
+            if (sg.material != 0 && sg.breakEnergy > 0 && !sg.broken) {
+                sg.damage += im.work;
+                if (sg.damage >= sg.breakEnergy) {
+                    sg.broken = true;
+                    kind = 2;
+                    if (g.breaks.size() < 16)
+                        g.breaks.push_back({im.id, sg.material, im.point.x, im.point.y, im.normal.x, im.normal.y, im.closingSpeed, 0.5});
+                }
+            }
+        }
+        if (im.closingSpeed > 1 && g.hits.size() < 16)
+            g.hits.push_back({im.point.x, im.point.y, im.point.z, im.normal.x, im.normal.y, im.closingSpeed, kind});
+    }
+    Vec3 acc = v.telemetry().accelBody;
+    const double am = length(acc), cap = 150 * 9.81;
+    if (am > cap) acc = acc * (cap / am);
+    // A crash for the dummies' report: only a real hit, the obstacles' contact alone decelerating
+    // the car at more than 5 g (scraping along a wall is not a crash); then the car's own speed
+    // change (in a hit that hard the tyres hardly count; the contact impulse itself overstates
+    // it, part of it goes into the structure's nodes and is damped away).
+    if (length(contactDv) > 5 * 9.81 * kStep) {
+        const Vec3 dv = v.state().orientation.inverseRotate(v.state().velocity - vBefore);
+        for (auto& o : g.occupant) o.recordImpact({dv.x, dv.y, 0}, v.damageState().intrusion);
+    }
+    for (auto& o : g.occupant) o.step(kStep, acc);
+    g.input.shiftUp = g.input.shiftDown = false;
+    holdInTunnel();
+}
+
 void stepOnce() {
+    if (g.damageMode == 1 && g.vehicle->damageEnabled()) { stepDamaged(); return; }
     g.vehicle->step(kStep, g.input, *g.ground);
     if (g.shadow && !g.shadow->faulted()) g.shadow->step(kStep, g.input, *g.ground);
     // driving acceleration seen by the occupants (before any collision
@@ -1045,6 +1220,7 @@ void stepOnce() {
     g.pendingDeltaV = {};
     for (auto& o : g.occupant) o.step(kStep, acc);
     g.input.shiftUp = g.input.shiftDown = false;
+    holdInTunnel();
 }
 }  // namespace
 
@@ -1135,6 +1311,7 @@ void rebuildKeepingMotion() {
     setupOccupants();
     g.vehicle->setChassisState(b);
     g.vehicle->setRollingSpeed(vx);
+    applyDamage();
     g.vehicle->setWind(g.wind);
     if (g.tyreWarmers >= 0) g.vehicle->setTyreTemperatures(g.tyreWarmers);
     publish();
@@ -1507,4 +1684,119 @@ ORD_EXPORT double* ord_vehicle_info() {
     const VehicleDefinition& d = g.vehicle->definition();
     g_info = {d.centerOfMass.x, d.centerOfMass.y, d.centerOfMass.z, d.mass, d.inertia.x, d.inertia.y, d.inertia.z};
     return g_info.data();
+}
+
+// ---- damage (damage.hpp) ----
+// 0: the crash model's impulses (the page draws its own dents); 1: the node/beam crash structure
+// with mechanical damage on the player's car (rebuilt with the car; repaired on change).
+ORD_EXPORT void ord_set_damage(int mode) {
+    g.damageMode = mode == 1 ? 1 : 0;
+    applyDamage();
+    publish();
+}
+ORD_EXPORT int ord_damage_mode() { return g.damageMode; }
+ORD_EXPORT void ord_repair() {
+    if (g.vehicle) g.vehicle->repairDamage();
+}
+// Parts and structure, 22 + 6 per wheel doubles (see web/README.md, Damage).
+constexpr int kDamageHeader = 22, kDamagePerWheel = 6;
+std::array<double, kDamageHeader + kDamagePerWheel * kMaxWheels> g_damage{};
+ORD_EXPORT double* ord_damage_state() {
+    g_damage.fill(0);
+    if (!g.vehicle || !g.vehicle->damageEnabled()) return g_damage.data();
+    const DamageState& d = g.vehicle->damageState();
+    double* o = g_damage.data();
+    o[0] = 1; o[1] = d.awake ? 1 : 0; o[2] = d.version;
+    o[3] = d.crushFront; o[4] = d.crushRear; o[5] = d.crushLeft; o[6] = d.crushRight; o[7] = d.crushRoof;
+    o[8] = d.intrusion; o[9] = d.plasticWork; o[10] = d.brokenBeams;
+    o[11] = d.radiator; o[12] = d.coolant; o[13] = d.engineTemperature; o[14] = d.engineDamage; o[15] = d.engineSeized ? 1 : 0;
+    o[16] = d.torqueScale; o[17] = d.steeringOffset; o[18] = d.steeringLock; o[19] = d.dragScale; o[20] = d.wingScale;
+    o[21] = d.nodeContacts;
+    const std::size_t nw = g.vehicle->definition().wheels.size();
+    for (std::size_t w = 0; w < nw && w < kMaxWheels; ++w) {
+        const WheelDamage& wd = d.wheels[w];
+        double* q = o + kDamageHeader + kDamagePerWheel * w;
+        q[0] = wd.toe; q[1] = wd.camber; q[2] = wd.bend; q[3] = wd.detached ? 1 : 0; q[4] = wd.punctured ? 1 : 0; q[5] = wd.deflation;
+    }
+    return o;
+}
+// The structure's nodes, 8 doubles each: rest x, y, z, deformed x, y, z (body frame, ISO 8855),
+// zone (0 cell, 1 front, 2 rear, 3 side, 4 roof), free (0 anchored to the cell, 1 free).
+std::vector<double> g_cage;
+ORD_EXPORT int ord_cage_count() { return g.vehicle && g.vehicle->damageEnabled() ? g.vehicle->damage().nodeCount() : 0; }
+ORD_EXPORT double* ord_cage_nodes() {
+    const int n = ord_cage_count();
+    g_cage.resize(static_cast<std::size_t>(std::max(n, 1)) * 8);
+    for (int i = 0; i < n; ++i) {
+        const CageNode& c = g.vehicle->damage().node(i);
+        double* o = g_cage.data() + 8 * i;
+        o[0] = c.rest.x; o[1] = c.rest.y; o[2] = c.rest.z; o[3] = c.local.x; o[4] = c.local.y; o[5] = c.local.z;
+        o[6] = static_cast<double>(c.zone); o[7] = c.invMass > 0 ? 1 : 0;
+    }
+    return g_cage.data();
+}
+// Beams, 4 doubles each: node a, node b, broken, plastic deformation / length.
+std::vector<double> g_beams;
+ORD_EXPORT int ord_cage_beam_count() { return g.vehicle && g.vehicle->damageEnabled() ? g.vehicle->damage().beamCount() : 0; }
+ORD_EXPORT double* ord_cage_beams() {
+    const int n = ord_cage_beam_count();
+    g_beams.resize(static_cast<std::size_t>(std::max(n, 1)) * 4);
+    for (int i = 0; i < n; ++i) {
+        const CageBeam& b = g.vehicle->damage().beam(i);
+        double* o = g_beams.data() + 4 * i;
+        o[0] = b.a; o[1] = b.b; o[2] = b.broken ? 1 : 0; o[3] = b.plastic / std::max(b.length0, 1e-6);
+    }
+    return g_beams.data();
+}
+
+// ---- telemetry pages, aero geometry, wind tunnel ----
+// 16 header + 6 per wheel doubles (see web/README.md, Telemetry and wind tunnel).
+constexpr int kTelHeader = 16, kTelPerWheel = 6;
+std::array<double, kTelHeader + kTelPerWheel * kMaxWheels> g_tel{};
+ORD_EXPORT double* ord_telemetry() {
+    g_tel.fill(0);
+    if (!g.vehicle) return g_tel.data();
+    const Vehicle& v = *g.vehicle;
+    const TelemetryFrame& t = v.telemetry();
+    double* o = g_tel.data();
+    o[0] = t.rollAngle; o[1] = t.pitchAngle; o[2] = t.drivetrain.engineTorque; o[3] = t.drivetrain.driveshaftTorque;
+    o[4] = t.kineticEnergy; o[5] = t.aero.airspeed; o[6] = t.aero.downforceFront; o[7] = t.aero.downforceRear;
+    o[8] = t.aero.wingDownforce; o[9] = t.aero.drag; o[10] = t.aero.clearanceFront; o[11] = t.aero.clearanceRear;
+    o[12] = t.aero.yaw; o[13] = t.aero.wingStalled ? 1 : 0; o[14] = t.aero.floorStalled ? 1 : 0; o[15] = t.brakeInput;
+    for (std::size_t w = 0; w < t.wheelCount && w < kMaxWheels; ++w) {
+        const WheelTelemetry& wt = t.wheels[w];
+        double* q = o + kTelHeader + kTelPerWheel * w;
+        q[0] = wt.compression; q[1] = v.definition().wheels[w].suspension.travel; q[2] = wt.compressionRate;
+        q[3] = wt.temperature; q[4] = wt.camber; q[5] = wt.brakeTorque;
+    }
+    return o;
+}
+// Aero geometry for the airflow view, 24 doubles: drag area, front / rear downforce area,
+// wing span, chord, x, y, z, angle (0 span: no wing), side force area, density,
+// body box front, rear, half width, floor, roof, belt, roof rear, roof front (body frame),
+// aero floor z, ride-height reference, floor stall height, mass.
+std::array<double, 24> g_aeroInfo{};
+ORD_EXPORT double* ord_aero_info() {
+    g_aeroInfo.fill(0);
+    if (!g.vehicle) return g_aeroInfo.data();
+    const VehicleDefinition& d = g.vehicle->definition();
+    const AeroDef& a = d.aero;
+    const CageBox& b = g.vehicle->bodyBox();
+    double* o = g_aeroInfo.data();
+    o[0] = a.dragArea; o[1] = a.frontDownforceArea; o[2] = a.rearDownforceArea;
+    o[3] = a.rearWing.span; o[4] = a.rearWing.chord; o[5] = a.rearWing.position.x; o[6] = a.rearWing.position.y; o[7] = a.rearWing.position.z;
+    o[8] = a.rearWing.angle; o[9] = a.sideForceArea; o[10] = a.airDensity;
+    o[11] = b.front; o[12] = b.rear; o[13] = b.halfWidth; o[14] = b.floor; o[15] = b.roof; o[16] = b.belt; o[17] = b.roofRear; o[18] = b.roofFront;
+    o[19] = a.floorZ; o[20] = a.rideHeightRef; o[21] = a.floorStallHeight; o[22] = d.mass;
+    return o;
+}
+// Wind tunnel (a rolling road): while on, the car's horizontal position is held where it was
+// when the tunnel started, every step, and its forward speed at `speed` (m/s; 0 = its own): it
+// runs, and the air flows past it, at full physics on the same patch of ground. The wind (yaw)
+// and the steering stay the page's. Called again while on, it only changes the speed.
+ORD_EXPORT void ord_tunnel(int on, double speed) {
+    const bool was = g_tunnelState.on;
+    g_tunnelState.on = on != 0 && g.vehicle;
+    g_tunnelState.speed = speed;
+    if (g_tunnelState.on && !was) { g_tunnelState.x = g.vehicle->state().position.x; g_tunnelState.y = g.vehicle->state().position.y; }
 }
