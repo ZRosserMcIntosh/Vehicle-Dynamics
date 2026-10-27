@@ -94,6 +94,21 @@ Vehicle::Vehicle(const VehicleDefinition& def, const AssistConfig& assists, cons
             rideCompression_[w] = clamp((sprung - sd.springPreload) / std::max(sd.springRate, 1.0), 0.0, sd.travel);
         }
         setTyreTemperatures(def_.aero.ambientTemperature);
+        // Linkage tables: solve each real linkage over its travel (plus a margin
+        // for the bump stops). A geometry that cannot reach the travel makes the
+        // definition invalid, like any other bad parameter.
+        for (std::size_t w = 0; w < def_.wheels.size(); ++w) {
+            const SuspensionDef& sd = def_.wheels[w].suspension;
+            if (sd.linkage.type == LinkageType::Slider) continue;
+            kinT0_[w] = -rideCompression_[w] + sd.linkage.rideOffset;
+            std::string err;
+            if (!linkage_[w].build(sd.linkage, kinT0_[w] - 0.03, sd.travel + kinT0_[w] + 0.03, &err)) {
+                error_ = "wheel " + std::to_string(w) + ": " + err;
+                valid_ = false;
+                return;
+            }
+            kinDroopS_[w] = linkage_[w].springDeflection(kinT0_[w]);
+        }
     }
     {
         // Body collision hull: a box from the axles' overhangs, the track and a floor-to-roof
@@ -160,7 +175,9 @@ Real Vehicle::yawRate() const { return body_.orientation.inverseRotate(body_.ang
 
 Real Vehicle::wheelSteerAngle(std::size_t w, Real ref) const {
     const WheelDef& wd = def_.wheels[w];
-    if (maxSteerRef_ <= 0 || wd.maxSteerAngle <= 0) return wd.isLeft ? -wd.staticToe : wd.staticToe;
+    // Static toe plus the linkage's bump steer at the current travel.
+    const Real toe = wd.staticToe + (linkage_[w].valid() ? linkagePose(w, wheels_[w].compression).toe : 0.0);
+    if (maxSteerRef_ <= 0 || wd.maxSteerAngle <= 0) return wd.isLeft ? -toe : toe;
     Real delta = ref * (wd.maxSteerAngle / maxSteerRef_);
     if (std::abs(delta) > 1e-6 && front_[w] && def_.steeringAckermann > 0 && def_.axles.size() >= 2) {
         const Real L = def_.wheelbase();
@@ -171,7 +188,27 @@ Real Vehicle::wheelSteerAngle(std::size_t w, Real ref) const {
         delta = sign(delta) * lerp(std::abs(delta), ideal, def_.steeringAckermann);
     }
     // Toe-in convention: positive static toe points both wheels toward the centreline.
-    return delta + (wd.isLeft ? -wd.staticToe : wd.staticToe);
+    return delta + (wd.isLeft ? -toe : toe);
+}
+
+LinkagePose Vehicle::linkagePose(std::size_t w, Real compression) const {
+    return linkage_[w].valid() ? linkage_[w].at(compression + kinT0_[w]) : LinkagePose{};
+}
+
+Real Vehicle::springRatio(std::size_t w, Real compression) const {
+    if (!linkage_[w].valid()) return 1.0;
+    return linkage_[w].at(compression + kinT0_[w]).motionRatio / linkage_[w].designMotionRatio();
+}
+
+Real Vehicle::springForceAt(std::size_t w, Real compression) const {
+    const SuspensionDef& sd = def_.wheels[w].suspension;
+    if (!linkage_[w].valid()) return sd.springPreload + sd.springRate * compression;
+    // Wheel rate k at the design position; the coil's deflection is the integral
+    // of the motion ratio, and its force comes back to the wheel through the
+    // ratio again: F = k * rho(x) * (S(x) - S(droop)).
+    const Real t = compression + kinT0_[w];
+    const Real rho = linkage_[w].at(t).motionRatio / linkage_[w].designMotionRatio();
+    return sd.springPreload + sd.springRate * rho * (linkage_[w].springDeflection(t) - kinDroopS_[w]);
 }
 
 VehicleSensors Vehicle::buildSensors(Real dt) const {
@@ -316,6 +353,11 @@ void Vehicle::placeOnGround(Real x, Real y, Real yaw, const GroundQuery& ground,
         const bool unsprung = usesUnsprung(w);
         const Real fs = load[w] - (unsprung ? wd.unsprungMass * kGravity : 0.0);
         xs[w] = clamp((fs - sd.springPreload) / sd.springRate, 0.0, sd.travel);
+        if (linkage_[w].valid())  // the motion ratio makes the wheel rate vary: a few Newton steps
+            for (int it = 0; it < 6; ++it) {
+                const Real k = sd.springRate * springRatio(w, xs[w]) * springRatio(w, xs[w]);
+                xs[w] = clamp(xs[w] + (fs - springForceAt(w, xs[w])) / std::max(k, 1.0), 0.0, sd.travel);
+            }
         pens[w] = unsprung ? load[w] / wd.tire.verticalStiffness : 0.0;
         const Real hpAbove = wd.tire.radius - pens[w] + (sd.travel - xs[w]);
         const Real zReq = (groundHit[w] ? groundZ[w] : groundAvg) + hpAbove - sd.hardpoint.z;
@@ -549,7 +591,6 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
     const Vec3 up = q.rotate({0, 0, 1});
     const Vec3 comWorld = centerOfMassWorld();
     const Vec3 gravity{0, 0, -kGravity};
-    const Real gU = dot(gravity, up);
 
     // ---- 1. Contact sampling + suspension (unsprung DOF or massless) ----
     std::array<Sample, kMaxContactSamples> samples{};
@@ -561,7 +602,20 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         const WheelDef& wd = def_.wheels[w];
         const SuspensionDef& sd = wd.suspension;
         const Real r = wd.tire.radius;
-        const Vec3 hp = body_.position + q.rotate(sd.hardpoint);
+        const Real side = wd.isLeft ? 1.0 : -1.0;
+        // The linkage's pose at the start-of-step travel: where the wheel centre
+        // has scrubbed to, and the direction it moves per metre of compression
+        // (the generalised direction of this wheel's DOF). Sliders: no scrub, +up.
+        const LinkagePose pose = linkagePose(w, ws.compression);
+        const Vec3 hp = body_.position + q.rotate(sd.hardpoint + Vec3{pose.lon, side * pose.lat, 0});
+        const Vec3 dof = q.rotate({pose.dLon, side * pose.dLat, 1.0});
+        const Real dof2 = dot(dof, dof);
+        ws.dofDir = dof;
+        // The contact patch's own path: the upright also tilts as it rises (the
+        // camber curve), which swings the bottom of the tyre sideways by r per
+        // radian. Forces at the patch do their work along this direction; it is
+        // what the front-view roll centre encodes.
+        const Vec3 dofPatch = q.rotate({pose.dLon, side * (pose.dLat - r * pose.dCamber), 1.0});
         ws.steer = wheelSteerAngle(w, cmd.steerAngle);
         const Vec3 headingWorld = q.rotate({std::cos(ws.steer), std::sin(ws.steer), 0});
         ws.hit = GroundHit{};
@@ -613,7 +667,7 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
                     const Real dist = length(d);
                     pen0[k] = r - dist;
                     radial[k] = dist > 1e-9 ? d / dist : up;
-                    slope = std::max(0.0, dot(radial[k], up));
+                    slope = std::max(0.0, dot(radial[k], dofPatch));
                 } else {
                     pen0[k] = (sd.travel - x0) + r - samples[k].d;  // flat footprint
                     // Patch samples push along their ground normal (tilted on curb and
@@ -621,26 +675,36 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
                     radial[k] = samples[k].normal;
                 }
                 if (pen0[k] <= 0) continue;
-                ru[k] = std::max(0.0, dot(radial[k], up)) * tilt;
+                ru[k] = std::max(0.0, dot(radial[k], dofPatch)) * tilt;  // work the sample does on the DOF
                 P0 += weight * pen0[k] * ru[k];
                 Pprev += weight * ws.prevPen[k] * ru[k];
                 Wact += weight * ru[k] * slope;
             }
-            // Suspension spring/damper/ARB/bump stops, linearised at x0.
+            // Suspension spring/damper/ARB/bump stops, linearised at x0. A linkage's
+            // motion ratio scales the wheel rate (rho^2) and the damping (rho^2).
+            const Real rho = springRatio(w, x0);
             Real c = 0;
-            const Real fd0 = damperForce(sd, xd0, c);  // linearised two-stage damper: fd ~ fd0 + c (xd - xd0)
-            Real As = sd.springPreload + sd.springRate * x0 + karb * (x0 - xo) + (fd0 - c * xd0);
-            Real Ks = sd.springRate + karb;
+            Real fd0 = damperForce(sd, xd0, c) * rho * rho;  // linearised two-stage damper: fd ~ fd0 + c (xd - xd0)
+            c *= rho * rho;
+            Real As = springForceAt(w, x0) + karb * (x0 - xo) + (fd0 - c * xd0);
+            Real Ks = sd.springRate * rho * rho + karb;
             if (x0 > sd.travel) { As += sd.bumpStopRate * (x0 - sd.travel); Ks += sd.bumpStopRate; }
             if (x0 < 0) { As += sd.bumpStopRate * x0; Ks += sd.bumpStopRate; }
             const Real Bs = Ks * dt + c;
             Real At = kt * P0 + ct * (P0 - Pprev) / dt;
             Real Bt = (kt * dt + ct) * Wact;
-            const Real rhs0 = m * xd0 / dt - As + m * gU - m * dot(aHp, up);
-            Real xd1 = (rhs0 + At) / (m / dt + Bt + Bs);
+            // The wheel's generalised mass along its path, gravity and the body's
+            // acceleration projected on it, and the work last step's tyre
+            // traction does on it: on a real linkage the path has sideways and
+            // fore/aft components, so cornering force jacks the suspension
+            // (roll centre) and braking force stiffens it (anti-dive).
+            const Vec3 traction = ws.longDir * ws.forces.fx + ws.latDir * ws.forces.fy;
+            const Real mg = m * dof2;
+            const Real rhs0 = mg * xd0 / dt - As + m * dot(gravity, dof) - m * dot(aHp, dof) + (linkage_[w].valid() ? dot(traction, dofPatch) : 0.0);
+            Real xd1 = (rhs0 + At) / (mg / dt + Bt + Bs);
             if (At - Bt * xd1 < 0) {  // tire would pull: it leaves the ground this step
                 At = Bt = 0;
-                xd1 = rhs0 / (m / dt + Bs);
+                xd1 = rhs0 / (mg / dt + Bs);
             }
             const Real x1 = x0 + dt * xd1;
             ws.compression = x1;
@@ -681,6 +745,7 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
                 ws.tireNormalForce = ft;
             }
             dbg.wheelCenter = wc1;
+            ws.wheelCenter = wc1;
         } else {
             // Massless wheel: compression follows the highest sample (rigid tire).
             Real best = -1e9;
@@ -689,12 +754,13 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
             ws.contact = best >= 0;
             const Real x = ws.contact ? best : 0.0;
             ws.compression = x;
-            Real f = sd.springPreload + sd.springRate * std::min(x, sd.travel);
+            Real f = springForceAt(w, std::min(x, sd.travel));
             if (x > sd.travel) f += sd.bumpStopRate * (x - sd.travel);
             const Real xdot = (x - ws.prevCompression) / dt;
             ws.compressionRate = xdot;
             Real slope = 0;
-            f += damperForce(sd, xdot, slope);
+            const Real rho = springRatio(w, x);
+            f += damperForce(sd, xdot, slope) * rho * rho;
             f += karb * (x - xo);
             ws.springForce = f;
             ws.load = ws.contact ? std::max(0.0, f) * tilt : 0.0;
@@ -711,6 +777,7 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
                 ws.patchPoint = patch / patchW;
             }
             dbg.wheelCenter = hp - up * (sd.travel - x);
+            ws.wheelCenter = dbg.wheelCenter;
         }
         if (!ws.contact) {
             ws.load = 0;
@@ -727,8 +794,8 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         {
             // Wheel inclination to the road: static camber + gain with
             // compression + caster with steer, through the body's roll.
-            const Real side = wd.isLeft ? 1.0 : -1.0;
-            Real g = side * (wd.staticCamber + wd.camberGain * (ws.compression - rideCompression_[w]));
+            const Real camberKin = linkage_[w].valid() ? pose.camber : wd.camberGain * (ws.compression - rideCompression_[w]);
+            Real g = side * (wd.staticCamber + camberKin);
             if (wd.maxSteerAngle > 0) g += std::sin(wd.casterAngle) * std::sin(ws.steer);
             const Real cs = std::cos(ws.steer), sn = std::sin(ws.steer);
             const Vec3 axle = q.rotate({-sn * std::cos(g), cs * std::cos(g), -std::sin(g)});
@@ -794,17 +861,16 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         const WheelDef& wd = def_.wheels[w];
         ws.omega = solveOut[w].omega;
         ws.slip.kappa = clamp(solveOut[w].kappa, -MagicFormulaTire::kSlipStateLimit, MagicFormulaTire::kSlipStateLimit);
-        const Vec3 hp = body_.position + q.rotate(wd.suspension.hardpoint);
         const bool unsprung = usesUnsprung(w);
         if (unsprung) {
             // Exact for a chassis integrated with the *total* mass M (so a host
-            // rigid body can simply use M): along the suspension axis
-            //   M a_body = F_tire + M g_u - m_u * xdd
+            // rigid body can simply use M): along the wheel's path
+            //   M a_body = F_tire + M g - m_u * xdd * dofDir
             // i.e. the body receives the tire normal force (at the patch) minus
-            // the wheel's inertia relative to the body (at the hardpoint).
-            const Vec3 fi = up * (-wd.unsprungMass * ws.relativeAccel);
+            // the wheel's inertia relative to the body (at the wheel centre).
+            const Vec3 fi = ws.dofDir * (-wd.unsprungMass * ws.relativeAccel);
             force += ws.tireNormalForce + fi;
-            torque += cross(ws.patchPoint - comWorld, ws.tireNormalForce) + cross(hp - comWorld, fi);
+            torque += cross(ws.patchPoint - comWorld, ws.tireNormalForce) + cross(ws.wheelCenter - comWorld, fi);
         }
         if (ws.load <= 0) {
             ws.forces = {};
@@ -1072,6 +1138,17 @@ void Vehicle::fillTelemetry(const DriverInput& input, const ActuatorCommands& cm
         wt.brakeTorque = cmd.brakeTorque[w];
         wt.brakeLocked = solveOut[w].brakeLocked;
         wt.surfaceId = ws.hit.surfaceId;
+    }
+    for (std::size_t a = 0; a < def_.axles.size(); ++a) {
+        Real h = 0;
+        for (int wi : {def_.axles[a].leftWheel, def_.axles[a].rightWheel}) {
+            const auto w = static_cast<std::size_t>(wi);
+            const WheelDef& wd = def_.wheels[w];
+            LinkagePose p = linkagePose(w, wheels_[w].compression);
+            if (!linkage_[w].valid()) p.dCamber = wd.camberGain;  // a slider with camber gain rotates the upright too
+            h += 0.5 * rollCentreHeight(p, std::abs(wd.suspension.hardpoint.y + (wd.isLeft ? 1 : -1) * p.lat), wd.tire.radius);
+        }
+        t.rollCentreHeight[a] = h;
     }
 }
 

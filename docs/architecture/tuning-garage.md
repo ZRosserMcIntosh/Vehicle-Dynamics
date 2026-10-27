@@ -108,8 +108,9 @@ wing downforce, floor clearance front/rear, and wing and floor stall flags. Per 
 
 ## Limits
 
-- Camber gain is linear in travel. Real suspension kinematics (hardpoints, roll centres,
-  bump steer) come next ([roadmap](../roadmap.md) M2.3).
+- On a slider suspension camber gain is linear in travel. Cars with a real linkage get their
+  camber and toe curves, roll centres and anti-dive from the geometry, and the ride height
+  moves them along those curves ([suspension-kinematics.md](suspension-kinematics.md)).
 - The tyre thermal model has one node: no surface vs carcass, no wear, and pressure does not
   rise with temperature.
 - Compound and aero numbers are representative, not data for any real tyre or wing. The tests

@@ -195,7 +195,9 @@ private:
         Real load = 0;
         Real springForce = 0;       // suspension force on the body along +up
         Vec3 tireNormalForce;       // unsprung mode: sum of radial sample forces, world
-        Real relativeAccel = 0;     // unsprung mode: wheel acceleration relative to the body along +up
+        Real relativeAccel = 0;     // unsprung mode: wheel acceleration relative to the body along dofDir
+        Vec3 dofDir{0, 0, 1};       // world direction the wheel centre moves per metre of compression (linkage path)
+        Vec3 wheelCenter;           // world
         TireSlipState slip;
         Real omega = 0;
         Vec3 longDir, latDir;
@@ -222,6 +224,11 @@ private:
     int sampleContact(std::size_t w, const Vec3& hp, const Vec3& up, const Vec3& heading, const GroundQuery& ground,
                       std::array<Sample, kMaxContactSamples>& out, int& patchCount);
     void staticWheelLoads(std::array<Real, kMaxWheels>& load) const;
+    // Linkage kinematics (kinematics.hpp): pose at a compression, and the spring
+    // force / rate at the wheel through the motion ratio (sliders: k * x).
+    LinkagePose linkagePose(std::size_t w, Real compression) const;
+    Real springForceAt(std::size_t w, Real compression) const;
+    Real springRatio(std::size_t w, Real compression) const;
     bool usesUnsprung(std::size_t w) const { return fidelity_.unsprungMass && def_.wheels[w].unsprungMass > 0; }
     void fillTelemetry(const DriverInput& input, const ActuatorCommands& cmd,
                        const std::array<WheelSolveOutput, kMaxWheels>& solveOut);
@@ -245,6 +252,9 @@ private:
     Vec3 inertiaBody_;
     Real maxSteerRef_ = 0;
     std::array<Real, kMaxWheels> rideCompression_{};  // compression at static ride height
+    std::array<LinkageTable, kMaxWheels> linkage_{};  // built once per wheel with a real linkage
+    std::array<Real, kMaxWheels> kinT0_{};             // linkage travel = compression + kinT0
+    std::array<Real, kMaxWheels> kinDroopS_{};         // spring deflection at full droop (wheel metres)
     Vec3 wind_{};
     AeroTelemetry aeroTel_;
     // Body collision hull (see BodyDef): points in the body frame, built once.
