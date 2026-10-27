@@ -60,7 +60,10 @@ TireForces MagicFormulaTire::evaluate(Real fz, Real kappa, Real tanAlpha, const 
     const Real wet = 1.0 / (1.0 + std::max(0.0, surf.wetSpeedFalloff * p_.aquaplaneSensitivity) * std::abs(speed));
     const Real compound = (1 + clamp(surf.wetness, 0.0, 1.0) * (p_.wetGrip - 1)) *
                           (1 + clamp(surf.looseness, 0.0, 1.0) * (p_.looseGrip - 1));
-    const Real base = std::max(0.0, surf.frictionScale) * wet * std::max(0.0, compound) * std::max(0.0, gripScale);
+    // A lifted share of the patch rides on water (mu ~0.05 of the road's).
+    const Real lifted = surf.waterDepth > 0 ? hydroplaneLift(p_, surf.waterDepth, speed) : 0.0;
+    const Real base = std::max(0.0, surf.frictionScale) * wet * std::max(0.0, compound) * std::max(0.0, gripScale) *
+                      (1.0 - 0.95 * lifted);
     const Real alpha = std::atan(tanAlpha);
     // Camber and peak grip: lateral relative to leaning into the force
     // direction (smooth sign of the slip angle), longitudinal from |gamma|.
@@ -104,6 +107,25 @@ Real MagicFormulaTire::temperatureGrip(Real t) const {
     // overheated rubber blisters and goes greasy (floor 60%).
     const Real x = (t - p_.optimalTemperature) / std::max(p_.temperatureWindow, 1.0);
     return std::max(x < 0 ? 0.75 : 0.6, 1 - p_.temperatureGripLoss * x * x);
+}
+
+Real hydroplaningSpeed(const TireParams& t) {
+    constexpr Real rhoW = 1000.0, cl = 0.643;  // reproduces Horne's 6.35 sqrt(p[kPa]) km/h
+    return std::sqrt(2.0 * std::max(t.inflationPressure, 10.0) * 1000.0 / (rhoW * cl));
+}
+
+Real hydroplaneLift(const TireParams& t, Real waterDepth, Real speed) {
+    if (waterDepth <= 0) return 0;
+    const Real d0 = 0.0005 + 0.1 * t.treadDepth, d1 = 0.001 + 0.4 * t.treadDepth;
+    const Real depth = clamp((waterDepth - d0) / (d1 - d0), 0.0, 1.0);
+    const Real r = clamp((std::abs(speed) / hydroplaningSpeed(t) - 0.5) / 0.5, 0.0, 1.0);
+    return depth * r * r * (3 - 2 * r);
+}
+
+Real waterDrag(const TireParams& t, Real waterDepth, Real speed) {
+    if (waterDepth <= 0) return 0;
+    constexpr Real cd = 0.75;  // displacement drag coefficient (EASA CS-25 AMC 25.1591)
+    return 0.5 * 1000.0 * cd * (2 * t.patchHalfWidth) * waterDepth * speed * speed;
 }
 
 Real surfaceTextureHeight(const SurfaceProperties& s, Real x, Real y) {

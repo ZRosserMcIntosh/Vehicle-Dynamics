@@ -68,6 +68,7 @@ TireParams generateTireParams(const TireSpec& spec) {
     p.rollingResistance = c.rr;
     p.pneumaticTrail = 0.15 * std::sqrt(2 * unloaded * deflection);
     p.patchHalfWidth = 0.4 * w;
+    p.treadDepth = spec.category == TireCategory::Slick ? 0.0 : 0.008;
     p.patchHalfLength = std::min(0.5 * p.radius, std::sqrt(2 * unloaded * deflection));
     const Real mass = 18.0 + 0.9 * (spec.rimDiameterIn - 15.0) + 0.03 * (spec.sectionWidthMm - 205.0);
     p.wheelInertia = 0.6 * mass * unloaded * unloaded;

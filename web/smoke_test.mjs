@@ -214,5 +214,86 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   const st = state();
   check(`${name} drives`, ok && st[23] === 0 && st[7] * 3.6 > 50, `${(st[7] * 3.6).toFixed(0)} km/h after 3 s`);
 }
+// ---- Showcase layer: rewind, shadow car, launches, water, stunt park ----
+{
+  const A = new Float64Array(M.HEAPF64.buffer, M._ord_test_areas(), 35).slice();
+  // rewind: restore a snapshot and replay the same frames: exactly the same state
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  M._ord_create(6, -400, 0, 0);
+  const frames = [];
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 300; ++i) {
+    if (i === 100) M._ord_snap_push();
+    const f = { dt: 1 / 60 + (rnd() - 0.5) * 0.006, steer: Math.sin(i / 17) * 0.7, thr: 0.9, brk: i > 220 ? 0.6 : 0, up: i === 150 ? 1 : 0 };
+    if (i >= 100) frames.push(f);
+    M._ord_set_input(f.steer, f.thr, f.brk, 0, f.up, 0); M._ord_advance(f.dt);
+  }
+  const ref = state().slice();
+  M._ord_snap_restore(0);
+  for (const f of frames) { M._ord_set_input(f.steer, f.thr, f.brk, 0, f.up, 0); M._ord_advance(f.dt); }
+  const rep = state().slice();
+  let diff = 0; for (let i = 0; i < ref.length; ++i) diff = Math.max(diff, Math.abs(ref[i] - rep[i]));
+  check('rewind: snapshot + the same frames reproduce the state exactly', diff === 0, `max difference ${diff}`);
+  // shadow car: the S 600 Guard on the 911's inputs, heavier, so behind after a launch
+  M._ord_create(6, -400, 0, 0); M._ord_launch(-400, 0, 0, 10, 0);
+  const shOk = M._ord_shadow_start(9, 1) === 1;
+  for (let i = 0; i < 360 * 3; ++i) { M._ord_set_input(0, 1, 0, 0, 0, 0); M._ord_step(1); }
+  const sh = new Float64Array(M.HEAPF64.buffer, M._ord_shadow_state(), M._ord_state_header() + 4 * M._ord_state_per_wheel()).slice();
+  check('shadow car runs on the same inputs', shOk && sh[0] < state()[0] - 5 && sh[23] === 0, `911 at x ${state()[0].toFixed(1)}, Guard at ${sh[0].toFixed(1)}`);
+  M._ord_shadow_stop();
+  // crash lab: a launch into the barrier reports one hit and a finished injury report
+  const CY = M._ord_crash_lane_y(), BX = M._ord_crash_barrier_x();
+  M._ord_launch(BX - 6, CY, 0, 56 / 3.6, 0);
+  let hits = 0, hv = 0;
+  for (let i = 0; i < 720; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); const n = M._ord_hit_events(); if (n) { hits += n; hv = Math.max(hv, new Float64Array(M.HEAPF64.buffer, M._ord_hit_buffer(), 7)[5]); } }
+  const occ = new Float64Array(M.HEAPF64.buffer, M._ord_occupant_state(0), 24).slice();
+  check('crash lab: 56 km/h into the barrier', hits >= 1 && Math.abs(hv * 3.6 - 56) < 6 && occ[7] === 1, `${hits} hit(s), closing ${(hv * 3.6).toFixed(0)} km/h, delta-V ${(occ[9] * 3.6).toFixed(0)} km/h, HIC15 ${occ[14].toFixed(0)}`);
+  // water: steering into the 8 mm pool at 120 km/h hydroplanes (no yaw), at 50 it doesn't
+  const yawIn = (kmh) => {
+    M._ord_set_preset(2); M._ord_set_aids(0, 0, 0, 1);
+    M._ord_create(6, A[2] - 30, A[1], 0); M._ord_launch(A[2] - 30, A[1], 0, kmh / 3.6, 0);
+    let y = 0;
+    for (let i = 0; i < 360 * 3; ++i) { const s = state(); M._ord_set_input(s[0] > A[2] + 5 ? 0.2 : 0, 0, 0, 0, 0, 0); M._ord_step(1); if (s[0] > A[2] + 5 && s[0] < A[3]) y = Math.max(y, Math.abs(state()[9])); if (s[0] > A[3]) break; }
+    return y;
+  };
+  const y50 = yawIn(50), y120 = yawIn(120);
+  check('water: the car steers in the pool at 50 km/h and hydroplanes at 120', y50 > 0.15 && y120 < 0.25 * y50, `peak yaw rate ${y50.toFixed(2)} vs ${y120.toFixed(2)} rad/s`);
+  M._ord_set_weather(1);
+  const np = M._ord_puddles(0, 0, 150);
+  check('weather: rain makes puddles', np > 3, `${np} within 150 m`);
+  M._ord_set_weather(0);
+  check('weather: dry, none', M._ord_puddles(0, 0, 150) === 0, '');
+  // stunt park: the small jump lands upright; the loop, with lane keeping, goes all the way round
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  M._ord_create(6, -460, A[11], 0); M._ord_launch(-460, A[11], 0, 80 / 3.6, 0);
+  let maxZ = 0;
+  for (let i = 0; i < 360 * 14; ++i) { const s = state(); M._ord_set_input(-0.2 * (s[1] - A[11]), Math.max(0, Math.min(1, (80 / 3.6 - s[7]) * 0.5)), 0, 0, 0, 0); M._ord_step(1); maxZ = Math.max(maxZ, state()[2]); if (state()[0] > A[19] + A[21] + 20) break; }
+  const up = (s) => 1 - 2 * (s[4] * s[4] + s[5] * s[5]);
+  check('stunt park: the 1.5 m kicker at 80 km/h flies and lands upright', maxZ > 2 && up(state()) > 0.9 && state()[0] > A[19] + A[21], `peak ${maxZ.toFixed(1)} m, ends at x ${state()[0].toFixed(0)}`);
+  const nP = M._ord_loop_profile_count(), prof = new Float64Array(M.HEAPF64.buffer, M._ord_loop_profile(), 4 * nP).slice();
+  const len = prof[4 * (nP - 1) + 3]; let top = 0; for (let i = 0; i < nP; ++i) top = Math.max(top, prof[4 * i + 1]);
+  const x0 = -420, y0 = A[30] - (A[29] - x0) * Math.tan(A[34]);
+  M._ord_create(6, x0, y0, A[34]); M._ord_launch(x0, y0, A[34], 105 / 3.6, 0);
+  let sPrev = 0, zMax = 0, round = false;
+  for (let i = 0; i < 360 * 14; ++i) {
+    const s = state();
+    let steer = 0;
+    if (s[0] > A[29] - 2 && s[1] > A[30] - 4) {
+      let best = 1e9, sa = -1;
+      for (let k = 0; k < nP; ++k) { const sk = prof[4 * k + 3]; if (Math.abs(sk - sPrev) > 6) continue; const dx = A[29] + prof[4 * k] - s[0], dz = prof[4 * k + 1] - s[2], d = dx * dx + dz * dz; if (d < best) { best = d; sa = sk; } }
+      if (sa >= 0) {
+        sPrev = sa;
+        const yc = A[30] + A[32] * sa / len;
+        const r10 = 2 * (s[4] * s[5] + s[3] * s[6]), r11 = 1 - 2 * (s[4] * s[4] + s[6] * s[6]);
+        const vy = r10 * s[7] + r11 * s[8];
+        steer = Math.max(-0.3, Math.min(0.3, 0.25 * (yc - s[1]) - 0.25 * (vy - Math.abs(s[7]) * Math.sin(A[34]))));
+      }
+    }
+    M._ord_set_input(steer, s[0] < A[29] - 5 ? Math.max(0, Math.min(1, (105 / 3.6 - s[7]) * 0.5)) : 1, 0, 0, 0, 0); M._ord_step(1);
+    zMax = Math.max(zMax, state()[2]);
+    if (zMax > top - 2 && sPrev > len - 3 && state()[2] < 1 && up(state()) > 0.9) { round = true; break; }
+  }
+  check('stunt park: the clothoid loop goes all the way round', round && state()[23] === 0, `${top.toFixed(1)} m loop, top reached ${zMax.toFixed(1)} m`);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

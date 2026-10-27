@@ -40,6 +40,9 @@ void applyCompound(TireParams& t, TyreCompound c) {
     struct C {
         Real mu, stiff, shapeY, wet, aqua, loose, tOpt, tWin, tLoss, rr, relax, camberLoss;
     };
+    // Tread depth new, m: what the grooves can carry away before the tyre
+    // hydroplanes (rain tyres: deep, open channels; slicks: none).
+    static const Real tread[kTyreCompounds] = {0, 0.012, 0.008, 0.008, 0.006, 0.002, 0.0, 0.010};
     // Relative to the car's stock road tyre. Representative values: grip
     // ratios follow the usual ladder (road ~1.0 g, semi-slick ~1.2, slick
     // ~1.3 on a dry, warm surface), slicks lose most of their grip in the wet
@@ -70,6 +73,7 @@ void applyCompound(TireParams& t, TyreCompound c) {
     t.temperatureGripLoss = k.tLoss;
     t.rollingResistance *= k.rr;
     t.relaxationLengthY *= k.relax;
+    if (c != TyreCompound::Stock) t.treadDepth = tread[static_cast<int>(c)];
     // One-node tread: ~2 kg of rubber (3 kJ/K), cooled at ~5 + 1 W/K per m/s:
     // warms in a lap or two, settles ~20 K above ambient when cruising.
     t.thermalCapacity = 3000.0;
@@ -89,6 +93,7 @@ void applyPressure(TireParams& t, Real bar, Real nominal) {
     t.muX *= muF;
     t.muY *= muF;
     t.rollingResistance *= clamp(1 - 0.5 * dp, 0.6, 1.6);
+    t.inflationPressure = bar * 100.0;
 }
 
 VehicleSetup stockSetup(const VehicleDefinition& d) {
@@ -143,6 +148,8 @@ VehicleSetup stockSetup(const VehicleDefinition& d) {
 VehicleDefinition applySetup(const VehicleDefinition& stock, const VehicleSetup& s) {
     VehicleDefinition d = stock;
     const std::size_t na = d.axles.size();
+    // A raised (lowered) car has a higher (lower) floor: the mean change over the axles.
+    if (na > 0) d.body.clearanceOffset += (s.front.rideHeightMm + (na > 1 ? s.rear.rideHeightMm : s.front.rideHeightMm)) / 2000.0;
     for (std::size_t a = 0; a < na; ++a) {
         const AxleSetup& x = a == 0 ? s.front : s.rear;
         d.axles[a].antiRollBarRate = std::max(0.0, x.arbNmm) * 1000.0;
