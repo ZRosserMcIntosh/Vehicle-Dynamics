@@ -94,6 +94,9 @@ struct VehicleSensors {
     int gear = 1;
     int forwardGears = 6;
     Real shiftTime = 0.25;
+    UpshiftControl upshift = UpshiftControl::Snap;   // see drivetrain.hpp
+    Real driveTorque = 0;        // N*m through the gearbox input last step (magnitude)
+    Real clutchMaxTorque = 600;  // N*m, the clutch's capacity fully engaged
     // Engine rpm the current road speed would give in each forward gear (index = gear, 1-based).
     std::array<Real, 12> gearRpm{};
 };
@@ -162,6 +165,13 @@ private:
     Real shiftTimer_ = 0;
     Real shiftCooldown_ = 0;
     bool downshiftBlip_ = false;
+    // After an upshift the clutch keeps slipping (and the ignition retards) until the engine has
+    // come down to the new gear's speed, then locks over a short ramp: no flywheel dump into the
+    // tyres. upSyncT_ caps it in case the revs never match (wheelspin).
+    bool upSync_ = false;
+    Real upSyncT_ = 0;
+    Real engageRamp_ = 1;
+    Real shiftHold_ = 0.55;    // oncoming-clutch engagement during an upshift (see requestShift)
     Real driftWeight_ = 0;     // 0 -> 1 blend while the drift assist engages
     Real driftDir_ = 0;        // +1 drifting left (yawing left), -1 right
     Real driftCut_ = 0;        // throttle cut held by the drift assist

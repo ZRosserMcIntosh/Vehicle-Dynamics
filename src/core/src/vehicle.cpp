@@ -306,6 +306,9 @@ VehicleSensors Vehicle::buildSensors(Real dt) const {
     s.gear = assists_.currentGear();
     s.forwardGears = drivetrain_.forwardGearCount();
     s.shiftTime = def_.drivetrain.gearbox.shiftTime;
+    s.upshift = def_.drivetrain.gearbox.upshift;
+    s.driveTorque = std::abs(drivetrain_.telemetry().driveshaftTorque);
+    s.clutchMaxTorque = def_.drivetrain.clutch.maxTorque;
     for (int g = 1; g <= s.forwardGears && g < static_cast<int>(s.gearRpm.size()); ++g)
         s.gearRpm[g] = radSToRpm(drivetrain_.engineOmegaForGear(g));
     return s;

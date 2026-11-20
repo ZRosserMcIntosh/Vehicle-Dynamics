@@ -129,3 +129,18 @@ Covered by regression tests.
 - Force-feedback pipeline from the tire aligning torque (`TireForces::mz`), with wheel-specific settings.
 - Per-device response curves and dead zones exposed to the player.
 - Reference speed estimator from wheel speeds and an IMU, replacing the current ground-truth reference speed used by ABS/TCS.
+
+## Upshift strategy (gearbox definition)
+
+How the auto clutch handles an upshift is part of the car's gearbox definition
+(`GearboxDef::upshift`), because it is what the car's own gearbox controller (or its driver) does:
+
+- **Snap** (default, every car before the Rosser Stella change): the clutch closes again as soon as
+  the shift time is up. With a high-revving engine that has not yet come down to the new gear's
+  speed, this dumps the flywheel's energy into the driven tyres.
+- **PowerShift** (dual-clutch; the Rosser Stella V8): the oncoming clutch carries the torque the
+  tyres carried just before the shift (what traction control allowed), the ignition is cut deeply
+  until the engine is within ~120 rpm of the new gear's speed (at most 0.45 s), then the clutch
+  locks over ~80 ms. On a full-throttle 1-2 the peak rear slip ratio falls from 0.35 to 0.26.
+- **LiftAndRamp** (gated manual; the Stella Manuale): off the throttle with the clutch open while
+  the lever crosses the gate (a torque gap), then the clutch is let out as the revs come down.

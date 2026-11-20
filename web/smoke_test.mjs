@@ -373,5 +373,14 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   for (let i = 0; i < 360; ++i) M._ord_step(1);
   check('wind tunnel: off, the car moves again', state()[0] > 5, `x ${state()[0].toFixed(1)} m`);
 }
+// the Rosser Stella V8 Manuale (index 11): six-speed gated manual
+{
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  const ok = M._ord_create(11, 0, 0, 0);
+  M._ord_launch(0, 0, 0, 1, 0);
+  let top = 1;
+  for (let i = 0; i < 360 * 8; ++i) { M._ord_set_input(0, 1, 0, 0, 0, 0); M._ord_step(1); top = Math.max(top, state()[15]); }
+  check('Stella Manuale: created, drives and shifts', ok && top >= 3, `top gear ${top} after 8 s, ${(state()[7] * 3.6).toFixed(0)} km/h`);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);
