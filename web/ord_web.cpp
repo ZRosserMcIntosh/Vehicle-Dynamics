@@ -682,6 +682,7 @@ VehicleDefinition carByIndex(int i) {
         case 8: return vehicles::mercedesAmgS63();
         case 9: return vehicles::mercedesS600Guard();
         case 10: return vehicles::formula1Car2026();
+        case 11: return vehicles::rosserStellaV8Manuale();
         default: return vehicles::referenceSportsRwd();
     }
 }

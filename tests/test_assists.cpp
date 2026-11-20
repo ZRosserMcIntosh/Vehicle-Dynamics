@@ -496,3 +496,99 @@ TEST_CASE("drift: handbrake with the throttle held keeps the revs off the limite
     CHECK(lift.minGearAfterRelease >= lift.gearAtRelease);
     CHECK(!lift.spun);
 }
+
+TEST_CASE("Stella: a full-throttle 1-2 hands over without a torque spike, and the revs fall quickly") {
+    // The oncoming clutch of the dual-clutch box carries what the rear tyres carried before the
+    // shift and the ignition retards until the engine is down to second's speed. Snapping it shut
+    // (the old behaviour, still the default for other cars) dumped the flywheel into the tyres.
+    struct R { Real torquePeak, slipPeak; };
+    auto run = [](UpshiftControl u) {
+        VehicleDefinition d = vehicles::rosserStellaV8();
+        d.drivetrain.gearbox.upshift = u;
+        Vehicle v(d, makePreset(DrivingPreset::Sport));
+        FlatGround g;
+        v.reset({0, 0, 0.6}, 0, g);
+        DriverInput in;
+        in.throttle = 1;
+        R r{0, 0};
+        Real t = 0, tShift = -1;
+        for (int i = 0; i < 360 * 5; ++i) {
+            v.step(1.0 / 360, in, g);
+            t += 1.0 / 360;
+            const TelemetryFrame& f = v.telemetry();
+            if (f.gear >= 2 && tShift < 0) tShift = t;
+            // the handover (skipping the one-step input-shaft resync on the ratio change)
+            if (tShift >= 0 && t - tShift > 0.01 && t - tShift < 0.3) {
+                r.torquePeak = std::max(r.torquePeak, std::abs(f.drivetrain.driveshaftTorque));
+                r.slipPeak = std::max(r.slipPeak, 0.5 * (f.wheels[2].slipRatio + f.wheels[3].slipRatio));
+            }
+        }
+        return r;
+    };
+    const R snap = run(UpshiftControl::Snap), power = run(UpshiftControl::PowerShift);
+    std::printf("    1-2 handover: drive torque peak %.0f -> %.0f N*m, rear slip peak %.3f -> %.3f (snap -> power shift)\n", snap.torquePeak, power.torquePeak, snap.slipPeak, power.slipPeak);
+    CHECK(power.slipPeak < snap.slipPeak - 0.05);   // the tyres no longer flare up on the handover
+    FlatGround g;
+
+    // free rev with the clutch in: it used to take over 2 s to fall from 8,500 to 3,000 rpm
+    AssistConfig c = makePreset(DrivingPreset::Simulation);
+    c.autoClutch = false;
+    Vehicle e(vehicles::rosserStellaV8(), c);
+    e.reset({0, 0, 0.6}, 0, g);
+    DriverInput r;
+    r.clutch = 1;
+    r.brake = 1;
+    r.throttle = 1;
+    for (int i = 0; i < 360 * 3 && e.telemetry().drivetrain.engineRpm < 8500; ++i) e.step(1.0 / 360, r, g);
+    r.throttle = 0;
+    const Real r0 = e.telemetry().drivetrain.engineRpm;
+    Real tf = 0;
+    while (e.telemetry().drivetrain.engineRpm > 3000 && tf < 5) { e.step(1.0 / 360, r, g); tf += 1.0 / 360; }
+    std::printf("    free rev: %.0f -> 3,000 rpm in %.2f s (%.0f rpm/s)\n", r0, tf, (r0 - 3000) / tf);
+    CHECK((r0 - 3000) / tf > 4000);
+}
+
+TEST_CASE("Stella Manuale: six gears and a real torque gap on the shift") {
+    const VehicleDefinition d = vehicles::rosserStellaV8Manuale();
+    CHECK(d.validate().empty());
+    CHECK(d.drivetrain.gearbox.forwardRatios.size() == 6);
+    Vehicle v(d, makePreset(DrivingPreset::Fun));
+    FlatGround g;
+    v.reset({0, 0, 0.6}, 0, g);
+    DriverInput in;
+    in.throttle = 1;
+    Real minDuring = 1e9;
+    int top = 1;
+    for (int i = 0; i < 360 * 8; ++i) {
+        v.step(1.0 / 360, in, g);
+        const TelemetryFrame& f = v.telemetry();
+        top = std::max(top, f.gear);
+        if (f.assists.shifting && f.gear >= 2) minDuring = std::min(minDuring, std::abs(f.drivetrain.driveshaftTorque));
+    }
+    std::printf("    Manuale: reached gear %d, drive torque during a shift down to %.0f N*m\n", top, minDuring);
+    CHECK(top >= 3);
+    CHECK(minDuring < 30);   // the clutch is down while the lever goes across
+}
+
+TEST_CASE("Stella: a slow steering ramp at 200 km/h stays on its line (no lift-off snap)") {
+    // the engine friction raised for the rev drop must not turn a lift in a fast corner into a spin
+    Vehicle v(vehicles::rosserStellaV8(), makePreset(DrivingPreset::Simulation));
+    FlatGround g;
+    v.reset({0, 0, 0.6}, 0, g);
+    const Real V = 200 / 3.6;
+    v.setRollingSpeed(V);
+    DriverInput in;
+    Real iT = 0, worstBeta = 0, peakAy = 0;
+    for (int i = 0; i < 360 * 24; ++i) {
+        const TelemetryFrame& t = v.telemetry();
+        iT = clamp(iT + (V - t.speed) * 0.002, -0.5, 1.0);
+        in.throttle = clamp(0.6 * (V - t.speed) + iT, 0.0, 1.0);
+        in.steer = std::min(1.0, 1.25 * i / (360.0 * 24));
+        v.step(1.0 / 360, in, g);
+        worstBeta = std::max(worstBeta, std::abs(v.telemetry().sideslip));
+        peakAy = std::max(peakAy, std::abs(v.telemetry().accelBody.y) / kGravity);
+    }
+    std::printf("    200 km/h ramp: peak %.2f g, worst sideslip %.1f deg\n", peakAy, worstBeta * 180 / kPi);
+    CHECK(worstBeta < 10 * kPi / 180);
+    CHECK(peakAy > 0.95 && peakAy < 1.3);
+}

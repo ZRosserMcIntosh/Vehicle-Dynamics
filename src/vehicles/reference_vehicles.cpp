@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #include "reference_vehicles.hpp"
 
+#include "ord/setup.hpp"
 #include "ord/tire_generator.hpp"
 
 namespace ord::vehicles {
@@ -269,8 +270,15 @@ VehicleDefinition rosserStellaV8() {
     // geometry, not from any drawing.
     f.suspension.linkage = makeDoubleWishbone(0.40, 0.29, 0.30, 0.06, 0.10, 0.55);
     f.camberGain = 0;              // the linkage provides the camber curve
+    // Static camber and the tyres' camber response: without them the outside tyres ran +1.5 deg
+    // to the road at the limit at no cost in grip (the camber model was only switched on by a
+    // garage setup).
+    f.staticCamber = -2.0 * kPi / 180;
+    enableCarCamberModel(f.tire);
     WheelDef r = f;
     r.tire = generateTireParams(rs);
+    enableCarCamberModel(r.tire);
+    r.staticCamber = -1.5 * kPi / 180;
     r.suspension.springRate = 64000;
     r.suspension.linkage = makeDoubleWishbone(0.45, 0.33, 0.30, 0.05, -0.06, 0.60);
     r.maxSteerAngle = 0;
@@ -278,7 +286,11 @@ VehicleDefinition rosserStellaV8() {
     r.handbrakeTorque = 2600;
     // 42/58 static split: CoM 1.536 m behind the front axle, 1.113 m ahead of the rear.
     addFourWheels(d, {1.536, -1.113, 0.836, 0.804, -0.05}, f, r);
-    d.axles = {{0, 1, 24000}, {2, 3, 15000}};
+    // Anti-roll bars: the front bar was 60 % stiffer than the rear on a car with 42 % of its
+    // weight on the front, so the front took most of the lateral load transfer (inside front
+    // down to ~600 N at the limit) and washed out first. Now about even front to rear; the
+    // extra rear downforce below keeps it planted at 200 km/h.
+    d.axles = {{0, 1, 14000}, {2, 3, 20000}};
     d.steeringAckermann = 0.5;
 
     // Game tune: naturally aspirated flat-plane V8, 9,000 rpm limiter, ~430 kW at 9,000 rpm.
@@ -289,12 +301,18 @@ VehicleDefinition rosserStellaV8() {
                      {7500, 520}, {8500, 480}, {9000, 455}, {9300, 380}};
     e.idleRpm = 1000;
     e.limiterRpm = 9000;
-    e.inertia = 0.14;
+    // A light flywheel (it was 0.14) and a little more friction and pumping (~64 N*m at
+    // 8,000 rpm, was ~47): off the throttle the revs now fall ~1.7x as fast. More friction would
+    // be closer to a race engine, but its engine braking made a lift in a fast corner spin the car.
+    e.inertia = 0.11;
+    e.frictionTorque = 22;
+    e.frictionPerRadS = 0.05;
     d.drivetrain.clutch.maxTorque = 900;
     d.drivetrain.gearbox.forwardRatios = {3.08, 2.19, 1.63, 1.29, 1.03, 0.84, 0.69};
     d.drivetrain.gearbox.reverseRatio = 2.9;
     d.drivetrain.gearbox.shiftTime = 0.08;
     d.drivetrain.gearbox.kind = TransmissionKind::DualClutch;
+    d.drivetrain.gearbox.upshift = UpshiftControl::PowerShift;
     DrivenAxle rear;
     rear.axleIndex = 1;
     rear.torqueShare = 1.0;
@@ -303,8 +321,24 @@ VehicleDefinition rosserStellaV8() {
     d.drivetrain.drivenAxles = {rear};
 
     d.aero.dragArea = 0.76;
-    d.aero.frontDownforceArea = 0.16;
-    d.aero.rearDownforceArea = 0.26;
+    d.aero.frontDownforceArea = 0.16;   // a little more at the rear: planted at high speed
+    d.aero.rearDownforceArea = 0.29;
+    return d;
+}
+
+VehicleDefinition rosserStellaV8Manuale() {
+    // The same car with a six-speed gated manual (open gate, single dry clutch) instead of the
+    // seven-speed dual clutch: longer ratios, a heavier flywheel, and shifts that open the clutch
+    // (a ~0.3 s torque gap) instead of handing over clutch to clutch.
+    VehicleDefinition d = rosserStellaV8();
+    d.name = "Rosser Stella V8 Manuale";
+    d.drivetrain.engine.inertia = 0.13;   // a heavier flywheel and single dry clutch
+    d.drivetrain.clutch.maxTorque = 800;
+    d.drivetrain.gearbox.forwardRatios = {3.08, 2.06, 1.52, 1.19, 0.97, 0.80};
+    d.drivetrain.gearbox.reverseRatio = 3.1;
+    d.drivetrain.gearbox.shiftTime = 0.30;
+    d.drivetrain.gearbox.kind = TransmissionKind::ManualHPattern;
+    d.drivetrain.gearbox.upshift = UpshiftControl::LiftAndRamp;
     return d;
 }
 

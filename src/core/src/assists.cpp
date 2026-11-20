@@ -222,6 +222,13 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
     auto requestShift = [&](int g, Real cooldown = 0.6) {
         if (g == gear_ || g < -1 || g > s.forwardGears) return;
         downshiftBlip_ = g >= 1 && g < gear_;
+        upSync_ = g > gear_ && g >= 1 && s.upshift != UpshiftControl::Snap;
+        upSyncT_ = 0;
+        // The oncoming clutch carries what the driven tyres were carrying just before the shift
+        // (traction control had trimmed it to what they can take), not a fixed share of its
+        // capacity: a fixed 55 % was ~40 % more than the tyres had in first, which spun them up
+        // on every full-throttle 1-2 (the screech).
+        if (upSync_) shiftHold_ = clamp(1.05 * s.driveTorque / std::max(s.clutchMaxTorque, 1.0), 0.12, 0.55);
         gear_ = g;
         shiftTimer_ = cfg_.autoClutch ? s.shiftTime : 0.0;
         shiftCooldown_ = s.shiftTime + cooldown;
@@ -287,11 +294,14 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
         if (shiftTimer_ > 0) {
             shiftTimer_ -= s.dt;
             cmd.clutchEngagement = 0;
-            if (!downshiftBlip_ && gear_ >= 1 && in.throttle > 0.5) {
+            if (s.upshift == UpshiftControl::LiftAndRamp && !downshiftBlip_ && gear_ >= 1) {
+                // a manual: off the throttle with the clutch down while the lever goes across
+                cmd.throttle = 0;
+            } else if (!downshiftBlip_ && gear_ >= 1 && in.throttle > 0.5) {
                 // Upshift under power, clutch-to-clutch: the oncoming clutch slips and pulls the engine down
                 // to the new gear's speed while drive continues, with a brief torque reduction
                 // (ignition retard). No free-revving flare and no torque gap.
-                cmd.clutchEngagement = 0.55;
+                cmd.clutchEngagement = s.upshift == UpshiftControl::PowerShift ? shiftHold_ : 0.55;
                 cmd.throttle *= 0.6;
             }
             // Rev-match on downshifts: blip the throttle up to the new gear's speed so the clutch
@@ -309,6 +319,28 @@ void AssistSystem::updateTransmission(const DriverInput& in, const VehicleSensor
             const Real lo = s.idleRpm * 1.05;
             const Real launch = std::max(cfg_.launchRpm, 1.5 * s.idleRpm);
             cmd.clutchEngagement = smoothstep((s.engineRpm - lo) / std::max(launch - lo, 100.0));
+            // Upshift, inertia phase: the clutch slips at about the engine's torque and the
+            // ignition is retarded until the engine is down to the new gear's speed (a real
+            // dual-clutch box does exactly this). Locking it straight away, with the engine still
+            // ~1,500 rpm high, dumped the flywheel's energy into the driven tyres: wheelspin and
+            // a screech on every full-throttle 1-2.
+            if (upSync_ && gear_ >= 1 && gear_ < static_cast<int>(s.gearRpm.size())) {
+                upSyncT_ += s.dt;
+                const Real target = s.gearRpm[static_cast<std::size_t>(gear_)];
+                if (target > 0 && s.engineRpm > target + 120 && upSyncT_ < 0.45) {
+                    cmd.clutchEngagement = std::min(cmd.clutchEngagement, shiftHold_);
+                    // a deep ignition cut: the slipping clutch (still driving the wheels) pulls the
+                    // engine down to speed in a few hundredths of a second
+                    cmd.throttle *= 0.2;
+                } else {
+                    upSync_ = false;
+                    engageRamp_ = shiftHold_;
+                }
+            }
+            if (engageRamp_ < 1) {   // then lock it over ~60 ms
+                engageRamp_ = std::min(1.0, engageRamp_ + s.dt / 0.08);
+                cmd.clutchEngagement = std::min(cmd.clutchEngagement, engageRamp_);
+            }
         }
         // Handbrake: a driver puts the clutch in while pulling it, or the engine just keeps driving
         // the rear wheels it is trying to lock (with the throttle held, the handbrake would do
