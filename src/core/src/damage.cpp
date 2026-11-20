@@ -459,6 +459,23 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
     // scratch in the model, not on the stack (WebAssembly and game threads have small stacks)
     auto& contacts = contacts_;
     int nc = 0;
+    // A yielding obstacle pushes back with at most its yieldForce, shared by every contact on it:
+    // a multiplier lambda in a substep of length h is a force lambda / h^2. Every obstacle's
+    // contacts also sum their multipliers for its peak force.
+    auto budget = [&](CageContact& c, Real dl, Real h2) {
+        if (c.group < 0) return dl;
+        CageContact& g = contacts[static_cast<std::size_t>(c.group)];
+        const Real yield = std::max(c.yieldForce, g.yieldForce);
+        if (yield > 0) {
+            const Real left = yield * h2 - g.groupLambda;
+            if (dl > left) {
+                dl = std::max(left, -c.lambdaN);
+                g.capped = true;
+            }
+        }
+        g.groupLambda += dl;
+        return dl;
+    };
     const Vec3 up = body.orientation.rotate({0, 0, 1});
     const Real margin = 0.02 + speed * dt;
     auto endPos = [&](int i) -> Vec3 {  // where the step's motion takes the node (no corrections)
@@ -507,6 +524,8 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                 c.normal = oc.normal;
                 c.mu = oc.friction;
                 c.obstacle = oc.id;
+                c.yieldForce = oc.yieldForce;
+                c.obstacleCompliance = oc.compliance;
                 c.closing = -dot(startVel(i), oc.normal);
                 // A cell node on an obstacle: the crush zone in front of it is used up. Past its
                 // crush limit the structure stiffens (a zone of 2.5x the frequency, shared by the
@@ -533,8 +552,20 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
             c.normal = oc.normal;
             c.mu = oc.friction;
             c.obstacle = oc.id;
+            c.yieldForce = oc.yieldForce;
+            c.obstacleCompliance = oc.compliance;
             c.closing = -dot(startVel(bm.a) * (1 - t) + startVel(bm.b) * t, oc.normal);
         }
+    }
+
+    // Contacts on the same obstacle share one budget (a yielding obstacle's yieldForce) and report
+    // one peak force: each points at the first of them.
+    for (int k = 0; k < nc; ++k) {
+        CageContact& c = contacts[static_cast<std::size_t>(k)];
+        if (c.obstacle < 0) continue;
+        c.group = k;
+        for (int j = 0; j < k; ++j)
+            if (contacts[static_cast<std::size_t>(j)].obstacle == c.obstacle) { c.group = j; break; }
     }
 
     // Nothing touching and the structure settled last step (driving past a wall, airborne on its
@@ -611,6 +642,7 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
         for (int k = 0; k < nc; ++k) {
             CageContact& c = contacts[static_cast<std::size_t>(k)];
             c.lambdaN = c.lambdaT = 0;
+            c.groupLambda = 0;
             const Vec3 p0 = c.b < 0 ? prevPos(c.a) : prevPos(c.a) * (1 - c.t) + prevPos(c.b) * c.t;
             c.allowance = std::max(0.0, dot(c.surface - p0, c.normal) - kMaxDepenetration * h);
         }
@@ -654,7 +686,9 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                             at /= 20.0;
                             target = depth - c.maxDepth * (1.0 - 1.0 / 20.0);
                         }
-                        const Real dl = std::max(-c.lambdaN, (target - at * c.lambdaN) / (wAt(c.a, p, c.normal) + at));
+                        if (c.obstacleCompliance > 0) at += c.obstacleCompliance / h2;
+                        Real dl = std::max(-c.lambdaN, (target - at * c.lambdaN) / (wAt(c.a, p, c.normal) + at));
+                        dl = budget(c, dl, h2);
                         c.lambdaN += dl;
                         move(c.a, p, c.normal * dl);
                     }
@@ -681,7 +715,14 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                     if (depth <= 0) continue;
                     const Real wa = wAt(c.a, pa, c.normal), wb = wAt(c.b, pb, c.normal);
                     const Real w = (1 - c.t) * (1 - c.t) * wa + c.t * c.t * wb;
-                    const Real dl = depth / std::max(w, kEps);
+                    Real dl;
+                    if (c.obstacleCompliance > 0) {
+                        const Real at = c.obstacleCompliance / h2;
+                        dl = std::max(-c.lambdaN, (depth - at * c.lambdaN) / (std::max(w, kEps) + at));
+                    } else {
+                        dl = depth / std::max(w, kEps);
+                    }
+                    dl = budget(c, dl, h2);
                     c.lambdaN += dl;
                     move(c.a, pa, c.normal * (dl * (1 - c.t)));
                     move(c.b, pb, c.normal * (dl * c.t));
@@ -703,6 +744,11 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
                     }
                 }
             }
+        }
+
+        for (int k = 0; k < nc; ++k) {
+            CageContact& c = contacts[static_cast<std::size_t>(k)];
+            if (c.group == k) c.peakForce = std::max(c.peakForce, c.groupLambda / h2);
         }
 
         // ---- velocities ----
@@ -785,6 +831,8 @@ bool DamageModel::stepStructure(Real dt, RigidBodyState& body, const RigidBodySt
             im.impulse += J;
             im.closingSpeed = std::max(im.closingSpeed, c.closing);
             im.work += J * std::max(0.0, c.closing);
+            if (c.group == k) im.peakForce = std::max(im.peakForce, c.peakForce);
+            im.atYield = im.atYield || contacts[static_cast<std::size_t>(c.group)].capped;
         }
         // a hard hit at a wheel cuts its tyre
         if (cfg_.mechanical && J / dt > 60000.0) {

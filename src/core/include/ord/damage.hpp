@@ -60,6 +60,16 @@ struct ObstacleContact {
     Vec3 normal;         // unit, pointing out of the obstacle (toward the car)
     Real friction = 0.4;
     int id = -1;         // the host's obstacle id (reported back in ObstacleImpact)
+    // Obstacles that give way (a sign post, a lamp column, a bollard, a sapling): the most force
+    // (N) the obstacle can put on the car, over all the car's contacts with it. 0: rigid (walls,
+    // buildings, and every obstacle that does not set it). Past it the car keeps moving into the
+    // obstacle's place; the host bends, breaks or moves the obstacle (ObstacleImpact.atYield)
+    // and reports its new shape on the next step.
+    Real yieldForce = 0;
+    // m/N: the obstacle's own elastic give before it yields (0: stiff). Keep it to the small
+    // spring of the obstacle itself (a post: ~1e-8): the obstacle's geometry must still hold the
+    // car, and a soft spring on a thin obstacle lets nodes through before it pushes back.
+    Real compliance = 0;
 };
 
 // Static obstacles the host knows about: walls, barriers, posts, trees. Implemented by the
@@ -90,6 +100,8 @@ struct ObstacleImpact {
     Real impulse = 0;    // N*s along the normal this step
     Real closingSpeed = 0;  // m/s, fastest node approach speed
     Real work = 0;       // J, impulse x closing speed (the energy the contact took this step)
+    Real peakForce = 0;  // N, the largest total force on the obstacle in any substep of the step
+    bool atYield = false;   // a yielding obstacle carried its yieldForce this step: it is giving way
 };
 
 struct DamageConfig {
@@ -158,6 +170,13 @@ struct CageContact {
     Real compliance = 0;  // m/N: the cell's own crush past the zones (anchored nodes on obstacles)
     Real maxDepth = 0;    // deepest the cell went in: it unloads plastically from there
     Real allowance = 0;   // m of overlap left this substep (an existing overlap is pushed out gradually)
+    // A yielding obstacle (ObstacleContact::yieldForce): the contacts on it share one budget.
+    Real yieldForce = 0;  // N, 0: rigid
+    Real obstacleCompliance = 0;  // m/N, the obstacle's elastic give
+    int group = -1;       // the first contact on the same obstacle (holds the shared budget and the peak)
+    Real groupLambda = 0; // on the group's first contact: the normal multiplier used this substep
+    Real peakForce = 0;   // on the group's first contact: the largest total force in a substep (N)
+    bool capped = false;  // the budget ran out this step
 };
 
 struct WheelDamage {
