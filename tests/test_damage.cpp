@@ -51,6 +51,33 @@ struct Pole final : ObstacleQuery {
     }
 };
 
+// A pole that gives way: the most force it puts on the car is `yield` (0: rigid).
+struct YieldingPole final : ObstacleQuery {
+    Real cx, cy, r, yield, comp;
+    YieldingPole(Real x, Real y, Real rad, Real f, Real c = 0) : cx(x), cy(y), r(rad), yield(f), comp(c) {}
+    bool anyNear(const Vec3& c, Real rad) const override { return std::hypot(c.x - cx, c.y - cy) < rad + r; }
+    ObstacleContact fill(ObstacleContact c) const {
+        c.yieldForce = yield;
+        c.compliance = comp;
+        return c;
+    }
+    ObstacleContact point(const Vec3& p, const Vec3&, Real margin) const override {
+        ObstacleContact c;
+        const Real dx = p.x - cx, dy = p.y - cy, d = std::hypot(dx, dy);
+        if (d < r + margin && d > 1e-9) { c.hit = true; c.depth = r - d; c.normal = {dx / d, dy / d, 0}; c.friction = 0.3; c.id = 7; }
+        return fill(c);
+    }
+    ObstacleContact edge(const Vec3& a, const Vec3& b, Real margin, Real& t) const override {
+        ObstacleContact c;
+        const Real ex = b.x - a.x, ey = b.y - a.y, l2 = ex * ex + ey * ey;
+        if (l2 < 1e-12) return c;
+        t = std::clamp(((cx - a.x) * ex + (cy - a.y) * ey) / l2, 0.0, 1.0);
+        const Real qx = a.x + ex * t, qy = a.y + ey * t, dx = qx - cx, dy = qy - cy, d = std::hypot(dx, dy);
+        if (d < r + margin && d > 1e-9) { c.hit = true; c.depth = r - d; c.normal = {dx / d, dy / d, 0}; c.friction = 0.3; c.id = 7; }
+        return fill(c);
+    }
+};
+
 struct CrashResult {
     Real dv = 0, peakG = 0, pulseMs = 0, rebound = 0, crush = 0, intrusion = 0, work = 0, ke = 0;
     bool faulted = false;
@@ -109,6 +136,44 @@ CrashResult frontal(const VehicleDefinition& def, Real kmh, const DamageConfig& 
     Vehicle v = crashCar(def, cfg);
     return frontal(v, kmh);
 }
+
+struct PostHit {
+    Real dv = 0, peakForce = 0, peakG = 0, work = 0, crush = 0;
+    bool atYield = false, faulted = false;
+};
+
+// The front of the car, centred, into a post at `kmh`; 0.6 s.
+PostHit postHit(Real kmh, Real yield, Real comp = 0) {
+    FlatGround g;
+    Vehicle v = crashCar(vehicles::referenceSaloonAwd());
+    const Real speed = kmh / 3.6;
+    v.placeOnGround(0, 0, 0, g, speed);
+    YieldingPole post(v.state().position.x + frontOf(v) + 0.3, v.state().position.y, 0.05, yield, comp);
+    v.setObstacles(&post);
+    PostHit r;
+    DriverInput in;
+    const Real dt = 1.0 / 360;
+    Real vPrev = speed, vMin = speed;
+    for (int i = 0; i < 216; ++i) {
+        v.step(dt, in, g);
+        const Real vx = v.state().velocity.x;
+        r.peakG = std::max(r.peakG, (vPrev - vx) / dt / kGravity);
+        vMin = std::min(vMin, vx);
+        vPrev = vx;
+        for (int k = 0; k < v.damage().impactCount(); ++k) {
+            const ObstacleImpact& im = v.damage().impact(k);
+            if (im.id != 7) continue;
+            r.peakForce = std::max(r.peakForce, im.peakForce);
+            r.atYield = r.atYield || im.atYield;
+            r.work += im.work;
+        }
+    }
+    r.dv = speed - vMin;
+    r.crush = v.damageState().crushFront;
+    r.faulted = v.faulted();
+    return r;
+}
+
 
 // A wall only on the car's left `share` of its width (offset frontal).
 struct OffsetWall final : ObstacleQuery {
@@ -588,4 +653,52 @@ TEST_CASE("damage: a rolling road holds the car in place and the structure goes 
     CHECK(std::abs(h.y - f.y) < 0.01);
     CHECK(std::abs(h.v - f.v) < 0.05);
     CHECK(std::abs(h.work - f.work) < 0.05 * f.work + 5);
+}
+
+TEST_CASE("damage: an obstacle that gives way pushes back with at most its strength") {
+    // A 50 mm steel sign post at 50 km/h: rigid, then yielding at 10 kN (a post bending at its base).
+    const PostHit rigid = postHit(50, 0), post = postHit(50, 10e3);
+    std::printf("    50 km/h, rigid post: dv %.1f km/h, peak %.0f kN, %.1f g, crush %.3f m\n", rigid.dv * 3.6, rigid.peakForce / 1e3,
+                rigid.peakG, rigid.crush);
+    std::printf("    50 km/h, 10 kN post: dv %.2f km/h, peak %.1f kN, %.2f g, crush %.3f m, at yield %d\n", post.dv * 3.6,
+                post.peakForce / 1e3, post.peakG, post.crush, post.atYield);
+    CHECK(!rigid.faulted && !post.faulted);
+    CHECK(rigid.dv > 0.9 * 50 / 3.6);             // the rigid post stops the car
+    CHECK(!rigid.atYield);
+    CHECK(post.atYield);
+    CHECK(post.peakForce <= 10e3 * 1.001);        // never more than its strength, over all contacts
+    CHECK(post.peakForce > 10e3 * 0.9);           // and it does push that hard
+    // 10 kN on a 1,700 kg car for the 0.6 s: at most 3.5 m/s; the car drives on
+    CHECK(post.dv < 0.6 * 10e3 / 1700 + 0.1);
+    CHECK(post.crush < 0.25 * rigid.crush);
+}
+
+TEST_CASE("damage: a stronger obstacle takes more speed, and a very strong one is a rigid one") {
+    Real last = 0;
+    for (Real f : {5e3, 20e3, 80e3}) {
+        const PostHit h = postHit(50, f);
+        std::printf("    yield %3.0f kN: dv %.2f m/s, peak %.1f kN\n", f / 1e3, h.dv, h.peakForce / 1e3);
+        CHECK(h.dv > last);
+        CHECK(h.peakForce <= f * 1.001);
+        last = h.dv;
+    }
+    const PostHit rigid = postHit(50, 0), huge = postHit(50, 1e9);
+    CHECK_NEAR(huge.dv, rigid.dv, 1e-9);          // a yield it never reaches changes nothing
+    CHECK(!huge.atYield);
+}
+
+TEST_CASE("damage: an obstacle's elastic give lowers the peak and lengthens the pulse") {
+    const PostHit stiff = postHit(32, 0), soft = postHit(32, 0, 1e-8);  // 10 um per kN: a stiff post's own spring
+    std::printf("    32 km/h rigid: peak %.0f kN, %.1f g; compliant: peak %.0f kN, %.1f g\n", stiff.peakForce / 1e3, stiff.peakG,
+                soft.peakForce / 1e3, soft.peakG);
+    CHECK(!soft.faulted);
+    CHECK(soft.peakForce < stiff.peakForce);
+    CHECK(soft.dv > 0.8 * 32 / 3.6);              // it still stops the car
+}
+
+TEST_CASE("damage: a yielding obstacle is deterministic") {
+    const PostHit a = postHit(70, 15e3), b = postHit(70, 15e3);
+    CHECK(a.dv == b.dv);
+    CHECK(a.peakForce == b.peakForce);
+    CHECK(a.work == b.work);
 }

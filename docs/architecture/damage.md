@@ -132,8 +132,16 @@ walls) never fault; a copy taken mid-crash continues bit-identically (rewind).
   `setObstacles`. `point()` returns the deepest penetration of a point, with thin walls pushing
   toward the side of `ref` (the car's centre of mass); `edge()` handles posts and wall corners
   that fit between nodes.
-- `DamageModel::impact(i)` lists what was hit each step with its impulse and the work done
-  (breakable walls, sounds, particles).
+- `DamageModel::impact(i)` lists what was hit each step with its impulse, the work done and
+  the peak force (breakable walls, sounds, particles).
+- Obstacles that give way (sign posts, lamp columns, bollards, saplings, breakaway supports):
+  set `ObstacleContact::yieldForce` to the most force (N) the obstacle can put on the car. All
+  of the car's contacts with that obstacle share it; past it the car keeps moving into the
+  obstacle's place instead of being stopped, and `ObstacleImpact::atYield` tells the host the
+  obstacle is giving way, so it can bend, break or move it and report the new shape next step.
+  `ObstacleContact::compliance` adds the obstacle's own small elastic give (m/N, a post about
+  1e-8). Both default to 0: a rigid obstacle, exactly as before. A 50 mm post yielding at 10 kN
+  costs a saloon at 50 km/h about 2 km/h; the same post rigid stops it (`tests/test_damage.cpp`).
 - Draw the body from `DamageModel::node(i)`: `rest` (as built) and `local` (as deformed), body
   frame. Skin the mesh to the nodes (each vertex to its nearest few rest positions).
 - The structure is stepped with `ChassisMode::Internal` only.
