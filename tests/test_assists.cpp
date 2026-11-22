@@ -616,3 +616,31 @@ TEST_CASE("Stella: stops like a 458 Italia (100-0 km/h ~33 m, 70-0 mph ~143 ft)"
     CHECK(a > 31.5 && a < 36.0);
     CHECK(b / 0.3048 > 133 && b / 0.3048 < 150);
 }
+
+TEST_CASE("brakes: the discs heat in a hard stop, cool in the airflow; off by default") {
+    FlatGround g;
+    DriverInput in;
+    Vehicle v(vehicles::rosserStellaV8(), makePreset(DrivingPreset::Sport));
+    v.reset({0, 0, 0.6}, 0, g);
+    v.setRollingSpeed(200 / 3.6);
+    v.step(1.0 / 360, in, g);
+    in.brake = 1;
+    while (v.telemetry().speed > 60 / 3.6) v.step(1.0 / 360, in, g);
+    const Real hot = v.telemetry().wheels[0].brakeTemperature, rear = v.telemetry().wheels[2].brakeTemperature;
+    in.brake = 0;
+    in.throttle = 0.3;
+    for (int i = 0; i < 360 * 60; ++i) v.step(1.0 / 360, in, g);
+    const Real cooled = v.telemetry().wheels[0].brakeTemperature;
+    std::printf("    200->60 km/h: front disc %.0f C, rear %.0f C; after a minute driving on %.0f C\n", hot, rear, cooled);
+    CHECK(hot > 350 && hot < 700);
+    CHECK(rear > 150 && rear < hot);
+    CHECK(cooled < 200);
+    // the reference cars have no brake thermal model: ambient, and the baseline is untouched
+    Vehicle r(vehicles::referenceSportsRwd(), makePreset(DrivingPreset::Sport));
+    r.reset({0, 0, 0.6}, 0, g);
+    r.setRollingSpeed(150 / 3.6);
+    in = DriverInput{};
+    in.brake = 1;
+    for (int i = 0; i < 360 * 3; ++i) r.step(1.0 / 360, in, g);
+    CHECK(std::abs(r.telemetry().wheels[0].brakeTemperature - 25.0) < 1e-9);
+}

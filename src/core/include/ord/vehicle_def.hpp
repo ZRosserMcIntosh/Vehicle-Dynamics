@@ -59,6 +59,19 @@ struct WheelDef {
     Real casterAngle = 0.0;
     Real maxBrakeTorque = 2000.0;  // N*m at 100% pedal
     Real handbrakeTorque = 0.0;    // N*m at 100% handbrake
+    // Brake disc temperature and fade (0 thermal mass = off). Two nodes: the disc's surface layer,
+    // which a hard stop heats in a second or two and which sets the friction (fade) and the glow,
+    // and the bulk of the disc and caliper, which soaks the heat up and cools with the airflow. The
+    // surface also radiates once it is hot.
+    Real brakeSurfaceMass = 0.0;     // J/K, surface layer (0 = no brake thermal model)
+    Real brakeBulkMass = 0.0;        // J/K, disc + caliper bulk
+    Real brakeConduction = 400.0;    // W/K, surface to bulk
+    Real brakeCooling = 8.0;         // W/K, bulk to air at standstill
+    Real brakeCoolingPerSpeed = 3.0; // W/K per m/s of road speed
+    Real brakeRadiatingArea = 0.08;  // m^2, surface radiating (emissivity 0.8)
+    Real brakeFadeStart = 600.0;     // deg C: friction starts to fall off here (surface)...
+    Real brakeFadeEnd = 850.0;       // ... and reaches brakeFadeMin here
+    Real brakeFadeMin = 0.6;         // fraction of the torque left fully faded
     Real unsprungMass = 40.0;      // kg: wheel, tire, hub, brake, half the links. Part of VehicleDefinition::mass.
     bool isLeft = true;
 };

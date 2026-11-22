@@ -667,7 +667,7 @@ constexpr int kSnapCapacity = 240;
 std::vector<std::unique_ptr<Snapshot>> g_snaps;  // ring
 int g_snapHead = 0, g_snapCount = 0;
 // Frame state exported to JavaScript (see web/README.md for the layout).
-constexpr int kHeader = 39, kPerWheel = 17;
+constexpr int kHeader = 39, kPerWheel = 18;
 std::array<double, kHeader + kPerWheel * kMaxWheels> g_out{};
 
 VehicleDefinition carByIndex(int i) {
@@ -916,6 +916,7 @@ void publishVehicle(const Vehicle& v, double* o) {
         p[11] = wt.contact ? 1 : 0; p[12] = wt.brakeLocked ? 1 : 0;
         p[13] = t.assists.absActive[w] ? 1 : 0; p[14] = t.assists.escBrakeTorque[w]; p[15] = wt.surfaceId;
         p[16] = wt.gripUsed;
+        p[17] = wt.brakeTemperature;
     }
 }
 

@@ -225,6 +225,8 @@ private:
         TireForces forces;
         Real camber = 0;            // rad, inclination to the ground normal (top toward +y positive)
         Real temperature = 25;      // deg C, tread (thermal model)
+        Real brakeSurface = 25;     // deg C, brake disc surface layer (brake thermal model)
+        Real brakeBulk = 25;        // deg C, disc + caliper bulk
     };
 
     struct Sample {

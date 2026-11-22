@@ -268,6 +268,17 @@ VehicleDefinition rosserStellaV8() {
     f.suspension.reboundDamping = 4650;
     f.maxSteerAngle = 0.55;
     f.maxBrakeTorque = 3800;       // carbon-ceramic
+    // Carbon-ceramic discs: light (a thin, fast-heating surface), fade only when abused. One stop
+    // from 200 km/h puts ~550 kJ into each front disc: its surface reaches ~450 C (a dull red
+    // glow); a few hard laps take it to 700-900 C (orange). Fade starts past 750 C but is felt
+    // only past ~950 C: the brakes have far more torque than the tyres can use, so a mildly faded
+    // brake still locks them.
+    f.brakeSurfaceMass = 500;
+    f.brakeBulkMass = 7000;
+    f.brakeConduction = 220;
+    f.brakeFadeStart = 750;
+    f.brakeFadeEnd = 1000;
+    f.brakeFadeMin = 0.35;
     // Double wishbones at both ends (mid-engine sports car): the front with
     // mild anti-dive, the rear with a touch of anti-squat; representative
     // geometry, not from any drawing.
@@ -291,6 +302,8 @@ VehicleDefinition rosserStellaV8() {
     r.suspension.linkage = makeDoubleWishbone(0.45, 0.33, 0.30, 0.05, -0.06, 0.60);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 2300;
+    r.brakeSurfaceMass = 420;
+    r.brakeBulkMass = 5500;
     r.handbrakeTorque = 2600;
     // 42/58 static split: CoM 1.536 m behind the front axle, 1.113 m ahead of the rear.
     addFourWheels(d, {1.536, -1.113, 0.836, 0.804, -0.05}, f, r);

@@ -443,6 +443,7 @@ void Vehicle::placeOnGround(Real x, Real y, Real yaw, const GroundQuery& ground,
         WheelState& ws = wheels_[w];
         ws = WheelState{};
         ws.temperature = def_.aero.ambientTemperature;
+        ws.brakeSurface = ws.brakeBulk = def_.aero.ambientTemperature;
         ws.compression = ws.prevCompression = xs[w];
         ws.prevPen.fill(pens[w]);
     }
@@ -960,6 +961,11 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
         si.relaxationLength = wd.tire.relaxationLengthX;
         si.kappa0 = ws.slip.kappa;
         si.brakeCapacity = cmd.brakeTorque[w];
+        if (wd.brakeSurfaceMass > 0 && ws.brakeSurface > wd.brakeFadeStart) {
+            // fade: the pads' friction falls off on an overheated disc
+            const Real k = clamp((ws.brakeSurface - wd.brakeFadeStart) / std::max(wd.brakeFadeEnd - wd.brakeFadeStart, 1.0), 0.0, 1.0);
+            si.brakeCapacity *= 1 - k * (1 - wd.brakeFadeMin);
+        }
         const Real omega = drivetrain_.wheelOmega(w);
         if (ws.load > 0) {
             tire.integrateLateralSlip(ws.slip, ws.contactVx, ws.contactVy, dt);
@@ -995,6 +1001,25 @@ void Vehicle::computeStep(Real dt, const DriverInput& input, const GroundQuery& 
     dc.clutchEngagement = cmd.clutchEngagement;
     dc.gear = cmd.gear;
     drivetrain_.step(dt, dc, solveIn.data(), solveOut.data());
+    // Brake discs: the brake's power (torque x wheel speed; a locked wheel heats the tyre instead)
+    // goes into the surface layer, which passes it to the bulk and radiates; the bulk cools in the
+    // airflow.
+    for (std::size_t w = 0; w < nw; ++w) {
+        const WheelDef& wd = def_.wheels[w];
+        if (wd.brakeSurfaceMass <= 0) continue;
+        WheelState& ws = wheels_[w];
+        const Real amb = def_.aero.ambientTemperature;
+        const Real power = solveOut[w].brakeLocked ? 0.0 : solveIn[w].brakeCapacity * std::abs(solveOut[w].omega);
+        const Real toBulk = wd.brakeConduction * (ws.brakeSurface - ws.brakeBulk);
+        const Real tS = ws.brakeSurface + 273.15, tA = amb + 273.15;
+        const Real radiated = 0.8 * 5.670374e-8 * wd.brakeRadiatingArea * (tS * tS * tS * tS - tA * tA * tA * tA);
+        const Real speed = std::abs(body_.orientation.conjugate().rotate(body_.velocity).x);
+        const Real toAir = (wd.brakeCooling + wd.brakeCoolingPerSpeed * speed) * (ws.brakeBulk - amb);
+        ws.brakeSurface += dt * (power - toBulk - radiated) / wd.brakeSurfaceMass;
+        ws.brakeBulk += dt * (toBulk - toAir) / std::max(wd.brakeBulkMass, 1.0);
+        ws.brakeSurface = clamp(ws.brakeSurface, -40.0, 1400.0);
+        ws.brakeBulk = clamp(ws.brakeBulk, -40.0, 1400.0);
+    }
 
     // ---- 4. Chassis forces (non-gravitational first) ----
     Vec3 force{}, torque{};
@@ -1295,6 +1320,7 @@ void Vehicle::fillTelemetry(const DriverInput& input, const ActuatorCommands& cm
         }
         wt.camber = def_.wheels[w].isLeft ? ws.camber : -ws.camber;
         wt.temperature = ws.temperature;
+        wt.brakeTemperature = def_.wheels[w].brakeSurfaceMass > 0 ? ws.brakeSurface : def_.aero.ambientTemperature;
         wt.steerAngle = ws.steer;
         wt.brakeTorque = cmd.brakeTorque[w];
         wt.brakeLocked = solveOut[w].brakeLocked;
