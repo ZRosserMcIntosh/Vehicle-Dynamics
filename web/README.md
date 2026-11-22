@@ -227,3 +227,15 @@ structure with it), and its forward speed at `speed` m/s (0: its own speed). The
 restraint, as on a real rolling road, so the engine and drag do not change it; the tyres, the
 suspension and the aero run at full physics. A cross wind (`ord_set_wind`) sets the yaw. Calling
 it again while on only changes the speed; `ord_tunnel(0, 0)` releases the car.
+
+`ord_traffic_buffer(n)`: traffic cars as moving boxes the player's car collides with. The page
+writes n cars (at most 128) of `ord_traffic_stride()` = 12 doubles each: x, y, heading (rad),
+vx, vy (m/s), yaw rate (rad/s), length, width, height (m), mass (kg), mode (0 driven by the page,
+1 loose), and hit (largest closing speed since the page last cleared it, m/s). Each physics step
+moves them on at their velocity and resolves contacts with the player's car as a two-body impulse
+(the player's car with its full mass and inertia, the traffic car as a box in the ground plane;
+restitution 0.1, friction 0.3), and reports hits harder than 1 m/s through `ord_hit_events`. A car
+that is touched switches to mode 1: it slides on, its tyres scrubbing it to a stop at ~0.8 g, and
+the page should leave it to the physics. `ord_traffic_buffer(0)` removes the traffic. Traffic
+cars do not collide with walls or with each other, the bikes do not hit them, and in the
+Realistic damage mode they push the car without crushing its crash structure.
