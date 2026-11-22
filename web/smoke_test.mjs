@@ -384,7 +384,7 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   // brake discs: a hard stop heats them (per-wheel field 17)
   const H = M._ord_state_header(), P = M._ord_state_per_wheel();
   M._ord_create(5, 0, 0, 0); M._ord_launch(0, 0, 0, 200 / 3.6, 0);
-  for (let i = 0; i < 360 * 5 && state()[7] > 60 / 3.6; ++i) { M._ord_set_input(0, 0, 1, 0, 0, 0); M._ord_step(1); }
+  for (let i = 0; i < 360 * 5 && (i === 0 || state()[7] > 60 / 3.6); ++i) { M._ord_set_input(0, 0, 1, 0, 0, 0); M._ord_step(1); }   // (create republishes speed 0)
   const s = state(), tf = s[H + 17], tr = s[H + 2 * P + 17];
   check('brake discs heat in a hard stop', P >= 18 && tf > 300 && tr > 150, `front ${tf.toFixed(0)} C, rear ${tr.toFixed(0)} C after 200 -> 60 km/h`);
 }
