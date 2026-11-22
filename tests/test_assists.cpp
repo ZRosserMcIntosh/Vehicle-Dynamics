@@ -592,3 +592,27 @@ TEST_CASE("Stella: a slow steering ramp at 200 km/h stays on its line (no lift-o
     CHECK(worstBeta < 10 * kPi / 180);
     CHECK(peakAy > 0.95 && peakAy < 1.3);
 }
+
+TEST_CASE("Stella: stops like a 458 Italia (100-0 km/h ~33 m, 70-0 mph ~143 ft)") {
+    // Published: Ferrari 32.5 m, auto motor und sport 33.0-33.3 m; Automobile Magazine 143 ft.
+    // The Stella (1,180 kg, Cup-type tyres) with ABS, brakes applied at once.
+    auto stop = [](Real kmh) {
+        Vehicle v(vehicles::rosserStellaV8(), makePreset(DrivingPreset::Sport));
+        FlatGround g;
+        v.reset({0, 0, 0.6}, 0, g);
+        DriverInput in;
+        v.setRollingSpeed(kmh / 3.6);
+        for (int i = 0; i < 360; ++i) { in.throttle = 0.15; v.step(1.0 / 360, in, g); }
+        v.setRollingSpeed(kmh / 3.6);
+        in.throttle = 0;
+        in.brake = 1;
+        const Vec3 p0 = v.state().position;
+        Real t = 0;
+        while (v.telemetry().speed > 0.05 && t < 30) { v.step(1.0 / 360, in, g); t += 1.0 / 360; }
+        return std::hypot(v.state().position.x - p0.x, v.state().position.y - p0.y);
+    };
+    const Real a = stop(100), b = stop(112.65);
+    std::printf("    100-0 km/h %.1f m, 70-0 mph %.1f m (%.0f ft)\n", a, b, b / 0.3048);
+    CHECK(a > 31.5 && a < 36.0);
+    CHECK(b / 0.3048 > 133 && b / 0.3048 < 150);
+}
