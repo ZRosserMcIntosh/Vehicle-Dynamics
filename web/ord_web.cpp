@@ -667,7 +667,7 @@ constexpr int kSnapCapacity = 240;
 std::vector<std::unique_ptr<Snapshot>> g_snaps;  // ring
 int g_snapHead = 0, g_snapCount = 0;
 // Frame state exported to JavaScript (see web/README.md for the layout).
-constexpr int kHeader = 39, kPerWheel = 17;
+constexpr int kHeader = 39, kPerWheel = 18;
 std::array<double, kHeader + kPerWheel * kMaxWheels> g_out{};
 
 VehicleDefinition carByIndex(int i) {
@@ -682,6 +682,7 @@ VehicleDefinition carByIndex(int i) {
         case 8: return vehicles::mercedesAmgS63();
         case 9: return vehicles::mercedesS600Guard();
         case 10: return vehicles::formula1Car2026();
+        case 11: return vehicles::rosserStellaV8Manuale();
         default: return vehicles::referenceSportsRwd();
     }
 }
@@ -887,6 +888,120 @@ void resolveCollisions() {
     }
 }
 
+// ---- Traffic: cars the page's traffic AI drives, as moving boxes the player's car hits ----
+// The page writes each traffic car's pose and velocity every frame; between frames they move on
+// at that velocity, one physics step at a time, so a contact is found where it happens. A car
+// the player touches is knocked loose (mode 1): from then on it slides here, its tyres scrubbing
+// it to a stop at ~0.8 g, and the page leaves it where it ends up. The contact is a two-body
+// impulse: the player's car with its full mass and inertia, the traffic car in the ground plane
+// (mass and yaw inertia of a box), restitution 0.1, friction 0.3.
+// Per car (kTrafficStride doubles): x, y, heading, vx, vy, yaw rate, length, width, height,
+// mass, mode (0 driven, 1 loose), hit (largest closing speed since the page cleared it).
+constexpr int kTrafficStride = 12, kTrafficMax = 128;
+std::vector<double> g_traffic;
+int g_trafficN = 0;
+
+void stepTraffic(double dt) {
+    for (int k = 0; k < g_trafficN; ++k) {
+        double* c = g_traffic.data() + kTrafficStride * k;
+        if (c[10] >= 1) {   // loose: the tyres scrub the speed and the spin away
+            const double sp = std::hypot(c[3], c[4]), dec = 0.8 * 9.81 * dt;
+            const double f = sp > dec ? (sp - dec) / sp : 0;
+            c[3] *= f; c[4] *= f;
+            c[5] = std::abs(c[5]) > 2.5 * dt ? c[5] - std::copysign(2.5 * dt, c[5]) : 0;
+        }
+        c[0] += c[3] * dt; c[1] += c[4] * dt; c[2] += c[5] * dt;
+    }
+}
+
+void resolveTraffic() {
+    if (!g_trafficN || !g.vehicle) return;
+    Vehicle& v = *g.vehicle;
+    const VehicleDefinition& d = v.definition();
+    RigidBodyState b = v.state();
+    const Vec3 vBefore = b.velocity;
+    double xf = -1e9, xr = 1e9, hw = 0;
+    for (const auto& w : d.wheels) { xf = std::max(xf, w.suspension.hardpoint.x); xr = std::min(xr, w.suspension.hardpoint.x); hw = std::max(hw, std::abs(w.suspension.hardpoint.y)); }
+    xf += 1.0; xr -= 1.15; hw += 0.16;
+    const double ex = 0.5 * (xf - xr), ey = hw, cxl = 0.5 * (xf + xr), m = d.mass;
+    bool changed = false;
+    for (int k = 0; k < g_trafficN; ++k) {
+        double* c = g_traffic.data() + kTrafficStride * k;
+        Vec3 u = b.orientation.rotate({1, 0, 0}); u.z = 0;
+        const double ul = std::hypot(u.x, u.y); if (ul < 1e-6) return;
+        u.x /= ul; u.y /= ul;
+        const double ax = b.position.x + u.x * cxl, ay = b.position.y + u.y * cxl;
+        const double tx = c[0], ty = c[1], ch = std::cos(c[2]), sh = std::sin(c[2]), tl = 0.5 * c[6], tw = 0.5 * c[7];
+        if (std::hypot(ax - tx, ay - ty) > ex + ey + tl + tw) continue;
+        const double gz = groundHeight(tx, ty);
+        if (b.position.z > gz + c[8] + 0.4 || b.position.z < gz - 1.0) continue;   // jumped over it, or on another level
+        // SAT over the four box axes; n pushes the player's car away from the traffic car
+        const double A[4][2] = {{u.x, u.y}, {-u.y, u.x}, {ch, sh}, {-sh, ch}};
+        double best = 1e9, nx = 0, ny = 0;
+        bool sep = false;
+        for (const auto& a : A) {
+            const double rp = ex * std::abs(a[0] * u.x + a[1] * u.y) + ey * std::abs(-a[0] * u.y + a[1] * u.x);
+            const double rt = tl * std::abs(a[0] * ch + a[1] * sh) + tw * std::abs(-a[0] * sh + a[1] * ch);
+            const double dc = a[0] * (ax - tx) + a[1] * (ay - ty), o = rp + rt - std::abs(dc);
+            if (o <= 0) { sep = true; break; }
+            if (o < best) { best = o; nx = dc >= 0 ? a[0] : -a[0]; ny = dc >= 0 ? a[1] : -a[1]; }
+        }
+        if (sep) continue;
+        // contact point: the corners of each box that are inside the other (or between the centres)
+        double px = 0, py = 0; int np = 0;
+        auto inside = [](double qx, double qy, double cx, double cy, double ux, double uy, double hx, double hy) {
+            const double lx = (qx - cx) * ux + (qy - cy) * uy, ly = -(qx - cx) * uy + (qy - cy) * ux;
+            return std::abs(lx) <= hx && std::abs(ly) <= hy;
+        };
+        for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) {
+            const double qx = ax + u.x * ex * sx - u.y * ey * sy, qy = ay + u.y * ex * sx + u.x * ey * sy;
+            if (inside(qx, qy, tx, ty, ch, sh, tl, tw)) { px += qx; py += qy; ++np; }
+            const double rx = tx + ch * tl * sx - sh * tw * sy, ry = ty + sh * tl * sx + ch * tw * sy;
+            if (inside(rx, ry, ax, ay, u.x, u.y, ex, ey)) { px += rx; py += ry; ++np; }
+        }
+        if (np) { px /= np; py /= np; } else { px = 0.5 * (ax + tx); py = 0.5 * (ay + ty); }
+        const Vec3 com = b.position + b.orientation.rotate(d.centerOfMass);
+        const Vec3 n{nx, ny, 0};
+        const Vec3 cp{px, py, std::clamp(com.z, gz + 0.3, gz + std::max(0.35, c[8] - 0.3))};
+        const Vec3 r = cp - com;
+        const Mat3 R = b.orientation.toMatrix();
+        const Mat3 invI = R * Mat3::diagonal({1 / std::max(d.inertia.x, 1.0), 1 / std::max(d.inertia.y, 1.0), 1 / std::max(d.inertia.z, 1.0)}) * R.transposed();
+        const double m2 = std::max(c[9], 50.0), I2 = m2 * (c[6] * c[6] + c[7] * c[7]) / 12;
+        const double r2x = px - tx, r2y = py - ty;
+        auto invMass = [&](const Vec3& dir) {
+            const Vec3 rd = cross(r, dir);
+            const double r2d = r2x * dir.y - r2y * dir.x;
+            return 1 / m + dot(rd, invI * rd) + 1 / m2 + r2d * r2d / I2;
+        };
+        // split the overlap by mass
+        const double share = m2 / (m + m2);
+        b.position.x += nx * (best * share + 0.002); b.position.y += ny * (best * share + 0.002);
+        c[0] -= nx * best * (1 - share); c[1] -= ny * best * (1 - share);
+        const Vec3 v1 = b.velocity + cross(b.angularVelocity, r);
+        const Vec3 v2{c[3] - c[5] * r2y, c[4] + c[5] * r2x, 0};
+        const Vec3 vr = v1 - v2;
+        const double vn = dot(vr, n);
+        changed = true;
+        if (vn >= 0) continue;
+        const double jn = -(1 + 0.1) * vn / invMass(n);
+        Vec3 jv = n * jn;
+        const Vec3 vt = vr - n * vn;
+        const double vtl = length(vt);
+        if (vtl > 1e-6) { const Vec3 t = vt * (1 / vtl); jv = jv - t * std::min(vtl / invMass(t), 0.3 * jn); }
+        b.velocity = b.velocity + jv * (1 / m);
+        b.angularVelocity = b.angularVelocity + invI * cross(r, jv);
+        c[3] -= jv.x / m2; c[4] -= jv.y / m2; c[5] -= (r2x * jv.y - r2y * jv.x) / I2;
+        c[10] = 1;
+        c[11] = std::max(c[11], -vn);
+        g.impact = std::max(g.impact, -vn);
+        if (vn < -1 && g.hits.size() < 16) g.hits.push_back({cp.x, cp.y, cp.z, nx, ny, -vn, 0});
+    }
+    if (changed) {
+        v.setChassisState(b);
+        g.pendingDeltaV = g.pendingDeltaV + b.orientation.inverseRotate(b.velocity - vBefore);
+    }
+}
+
 void publishVehicle(const Vehicle& v, double* o) {
     const RigidBodyState& b = v.state();
     const TelemetryFrame& t = v.telemetry();
@@ -915,6 +1030,7 @@ void publishVehicle(const Vehicle& v, double* o) {
         p[11] = wt.contact ? 1 : 0; p[12] = wt.brakeLocked ? 1 : 0;
         p[13] = t.assists.absActive[w] ? 1 : 0; p[14] = t.assists.escBrakeTorque[w]; p[15] = wt.surfaceId;
         p[16] = wt.gripUsed;
+        p[17] = wt.brakeTemperature;
     }
 }
 
@@ -1167,6 +1283,9 @@ void stepDamaged() {
     const Vec3 vBefore = v.state().velocity;
     v.step(kStep, g.input, *g.ground);
     if (g.shadow && !g.shadow->faulted()) g.shadow->step(kStep, g.input, *g.ground);
+    stepTraffic(kStep);
+    resolveTraffic();   // traffic cars are moving boxes, outside the crash structure's static obstacles
+    g.pendingDeltaV = {};
     const DamageModel& dm = v.damage();
     Vec3 contactDv{};  // the speed change the obstacles' contact impulses made this step (world)
     for (int i = 0; i < dm.impactCount(); ++i) {
@@ -1215,6 +1334,8 @@ void stepOnce() {
     const double am = length(acc), cap = 40 * 9.81;
     if (am > cap) acc = acc * (cap / am);
     resolveCollisions();
+    stepTraffic(kStep);
+    resolveTraffic();
     if (length(g.pendingDeltaV) > 0.5)
         for (auto& o : g.occupant) o.impact(g.pendingDeltaV);
     g.pendingDeltaV = {};
@@ -1662,6 +1783,16 @@ ORD_EXPORT int ord_hit_events() {
     return n;
 }
 ORD_EXPORT double* ord_hit_buffer() { return g_hitOut.data(); }
+// ---- traffic (see stepTraffic) ----
+// The page writes n cars (kTrafficStride doubles each) into ord_traffic_buffer(n) and reads
+// them back after ord_advance. n = 0 removes the traffic.
+ORD_EXPORT double* ord_traffic_buffer(int n) {
+    g_trafficN = std::clamp(n, 0, kTrafficMax);
+    if (g_traffic.size() < static_cast<std::size_t>(kTrafficStride * kTrafficMax)) g_traffic.assign(static_cast<std::size_t>(kTrafficStride * kTrafficMax), 0);
+    return g_traffic.data();
+}
+ORD_EXPORT int ord_traffic_stride() { return kTrafficStride; }
+
 // The crush structure the dummies' pulse comes from: front, rear, side natural frequency (rad/s),
 // front, rear, side crush limit (m), cabin half width (m). The page's crumple uses the same.
 namespace { std::array<double, 7> g_struct{}; }

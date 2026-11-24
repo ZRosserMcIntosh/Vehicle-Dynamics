@@ -373,5 +373,35 @@ for (const [idx, name] of [[6, '911 Carrera S'], [7, '911 Carrera 4S'], [8, 'AMG
   for (let i = 0; i < 360; ++i) M._ord_step(1);
   check('wind tunnel: off, the car moves again', state()[0] > 5, `x ${state()[0].toFixed(1)} m`);
 }
+// the Rosser Stella V8 Manuale (index 11): six-speed gated manual
+{
+  M._ord_set_preset(1); M._ord_set_aids(1, 1, 1, 1);
+  const ok = M._ord_create(11, 0, 0, 0);
+  M._ord_launch(0, 0, 0, 1, 0);
+  let top = 1;
+  for (let i = 0; i < 360 * 8; ++i) { M._ord_set_input(0, 1, 0, 0, 0, 0); M._ord_step(1); top = Math.max(top, state()[15]); }
+  check('Stella Manuale: created, drives and shifts', ok && top >= 3, `top gear ${top} after 8 s, ${(state()[7] * 3.6).toFixed(0)} km/h`);
+  // brake discs: a hard stop heats them (per-wheel field 17)
+  const H = M._ord_state_header(), P = M._ord_state_per_wheel();
+  M._ord_create(5, 0, 0, 0); M._ord_launch(0, 0, 0, 200 / 3.6, 0);
+  for (let i = 0; i < 360 * 5 && (i === 0 || state()[7] > 60 / 3.6); ++i) { M._ord_set_input(0, 0, 1, 0, 0, 0); M._ord_step(1); }   // (create republishes speed 0)
+  const s = state(), tf = s[H + 17], tr = s[H + 2 * P + 17];
+  check('brake discs heat in a hard stop', P >= 18 && tf > 300 && tr > 150, `front ${tf.toFixed(0)} C, rear ${tr.toFixed(0)} C after 200 -> 60 km/h`);
+  // traffic: a parked 1,400 kg car 20 m ahead; at 50 km/h the player's car hits it, slows, and
+  // the traffic car is knocked loose and pushed ahead; with the traffic removed it drives through
+  const drive = (n) => {
+    M._ord_create(0, 0, 0, 0); M._ord_launch(0, 0, 0, 50 / 3.6, 0);
+    const K = M._ord_traffic_stride();
+    const tb = () => new Float64Array(M.HEAPF64.buffer, M._ord_traffic_buffer(n), K * Math.max(n, 1));
+    if (n) tb().set([20, 0, 0, 0, 0, 0, 4.5, 1.85, 1.5, 1400, 0, 0]);
+    let hit = 0;
+    for (let i = 0; i < 360 * 3; ++i) { M._ord_set_input(0, 0, 0, 0, 0, 0); M._ord_step(1); hit += M._ord_hit_events(); }
+    return { x: state()[0], v: state()[7], car: n ? Array.from(tb().slice(0, K)) : null, hit };
+  };
+  const tr0 = drive(1), tr1 = drive(0);
+  check('traffic: the car hits a traffic car and shoves it', tr0.hit >= 1 && tr0.car[10] === 1 && tr0.car[11] > 8 && tr0.car[0] > 22 && tr0.x < tr0.car[0] - 3 && tr1.x > tr0.x + 3,
+    `hit at ${(tr0.car[11] * 3.6).toFixed(0)} km/h, traffic car pushed to x ${tr0.car[0].toFixed(1)} m, player at ${tr0.x.toFixed(1)} m (${tr1.x.toFixed(1)} m with no traffic)`);
+  M._ord_traffic_buffer(0);
+}
 console.log(failures ? `${failures} failure(s)` : 'PASSED');
 process.exit(failures ? 1 : 0);

@@ -31,5 +31,7 @@ VehicleDefinition referenceHypercarAwd();
 // Rosser Stella V8: ~1480 kg mid-engine RWD, flat-plane V8, ~430 kW, 9,000 rpm (game tune),
 // 7-speed dual clutch. The game's own fictional car (São Paulo World).
 VehicleDefinition rosserStellaV8();
+// The six-speed gated manual version (index 11 in the web build).
+VehicleDefinition rosserStellaV8Manuale();
 
 }  // namespace ord::vehicles

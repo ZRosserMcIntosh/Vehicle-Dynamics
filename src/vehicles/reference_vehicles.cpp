@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #include "reference_vehicles.hpp"
 
+#include "ord/setup.hpp"
 #include "ord/tire_generator.hpp"
 
 namespace ord::vehicles {
@@ -250,8 +251,11 @@ VehicleDefinition rosserStellaV8() {
     // Fictional; layout and wheel positions match the Blender model (wheelbase 2.649 m).
     VehicleDefinition d = referenceSportsRwd();
     d.name = "Rosser Stella V8";
-    d.mass = 1480;                 // aluminium spaceframe
-    d.inertia = {480, 1950, 2150}; // mass concentrated mid-car
+    // Target weight ~1,180 kg (Lotus Exige S V6 territory: 1,176 kg DIN): an aluminium tub,
+    // carbon panels and very little electronics. It was 1,480 kg; the springs, dampers, bars and
+    // inertias below are scaled with it so the car keeps its frequencies and balance.
+    d.mass = 1180;
+    d.inertia = {383, 1555, 1714}; // mass concentrated mid-car (was 480/1950/2150 at 1,480 kg)
     // 275/40 R21 front, 335/40 R21 rear (radii ~0.377 / 0.401 m, as modelled)
     TireSpec fs{275, 40, 21, TireCategory::UltraHighPerformance, 3050};
     TireSpec rs{335, 40, 21, TireCategory::UltraHighPerformance, 4200};
@@ -259,26 +263,55 @@ VehicleDefinition rosserStellaV8() {
     WheelDef f;
     f.tire = generateTireParams(fs);
     f.suspension.travel = 0.16;
-    f.suspension.springRate = 52000;
-    f.suspension.bumpDamping = 3400;
-    f.suspension.reboundDamping = 5200;
+    f.suspension.springRate = 41500;
+    f.suspension.bumpDamping = 3040;
+    f.suspension.reboundDamping = 4650;
     f.maxSteerAngle = 0.55;
     f.maxBrakeTorque = 3800;       // carbon-ceramic
+    // Carbon-ceramic discs: light (a thin, fast-heating surface), fade only when abused. One stop
+    // from 200 km/h puts ~550 kJ into each front disc: its surface reaches ~450 C (a dull red
+    // glow); a few hard laps take it to 700-900 C (orange). Fade starts past 750 C but is felt
+    // only past ~950 C: the brakes have far more torque than the tyres can use, so a mildly faded
+    // brake still locks them.
+    f.brakeSurfaceMass = 500;
+    f.brakeBulkMass = 7000;
+    f.brakeConduction = 220;
+    f.brakeFadeStart = 750;
+    f.brakeFadeEnd = 1000;
+    f.brakeFadeMin = 0.35;
     // Double wishbones at both ends (mid-engine sports car): the front with
     // mild anti-dive, the rear with a touch of anti-squat; representative
     // geometry, not from any drawing.
     f.suspension.linkage = makeDoubleWishbone(0.40, 0.29, 0.30, 0.06, 0.10, 0.55);
     f.camberGain = 0;              // the linkage provides the camber curve
+    // Static camber and the tyres' camber response: without them the outside tyres ran +1.5 deg
+    // to the road at the limit at no cost in grip (the camber model was only switched on by a
+    // garage setup).
+    f.staticCamber = -2.0 * kPi / 180;
+    enableCarCamberModel(f.tire);
+    // Cup-type road tyres: in a straight line they grip ~8 % more than the generic UHP tyre
+    // (whose braking peak barely exceeded its cornering peak). With it the car stops from
+    // 100 km/h in ~34 m and from 70 mph in ~140 ft (458 Italia: 32.5-33.3 m, 143 ft).
+    f.tire.muX *= 1.08;
     WheelDef r = f;
     r.tire = generateTireParams(rs);
-    r.suspension.springRate = 64000;
+    enableCarCamberModel(r.tire);
+    r.tire.muX *= 1.08;
+    r.staticCamber = -1.5 * kPi / 180;
+    r.suspension.springRate = 51000;
     r.suspension.linkage = makeDoubleWishbone(0.45, 0.33, 0.30, 0.05, -0.06, 0.60);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 2300;
+    r.brakeSurfaceMass = 420;
+    r.brakeBulkMass = 5500;
     r.handbrakeTorque = 2600;
     // 42/58 static split: CoM 1.536 m behind the front axle, 1.113 m ahead of the rear.
     addFourWheels(d, {1.536, -1.113, 0.836, 0.804, -0.05}, f, r);
-    d.axles = {{0, 1, 24000}, {2, 3, 15000}};
+    // Anti-roll bars: the front bar was 60 % stiffer than the rear on a car with 42 % of its
+    // weight on the front, so the front took most of the lateral load transfer (inside front
+    // down to ~600 N at the limit) and washed out first. Now about even front to rear; the
+    // extra rear downforce below keeps it planted at 200 km/h.
+    d.axles = {{0, 1, 12500}, {2, 3, 14600}};
     d.steeringAckermann = 0.5;
 
     // Game tune: naturally aspirated flat-plane V8, 9,000 rpm limiter, ~430 kW at 9,000 rpm.
@@ -289,12 +322,18 @@ VehicleDefinition rosserStellaV8() {
                      {7500, 520}, {8500, 480}, {9000, 455}, {9300, 380}};
     e.idleRpm = 1000;
     e.limiterRpm = 9000;
-    e.inertia = 0.14;
+    // A light flywheel (it was 0.14) and a little more friction and pumping (~64 N*m at
+    // 8,000 rpm, was ~47): off the throttle the revs now fall ~1.7x as fast. More friction would
+    // be closer to a race engine, but its engine braking made a lift in a fast corner spin the car.
+    e.inertia = 0.11;
+    e.frictionTorque = 22;
+    e.frictionPerRadS = 0.05;
     d.drivetrain.clutch.maxTorque = 900;
     d.drivetrain.gearbox.forwardRatios = {3.08, 2.19, 1.63, 1.29, 1.03, 0.84, 0.69};
     d.drivetrain.gearbox.reverseRatio = 2.9;
     d.drivetrain.gearbox.shiftTime = 0.08;
     d.drivetrain.gearbox.kind = TransmissionKind::DualClutch;
+    d.drivetrain.gearbox.upshift = UpshiftControl::PowerShift;
     DrivenAxle rear;
     rear.axleIndex = 1;
     rear.torqueShare = 1.0;
@@ -303,8 +342,24 @@ VehicleDefinition rosserStellaV8() {
     d.drivetrain.drivenAxles = {rear};
 
     d.aero.dragArea = 0.76;
-    d.aero.frontDownforceArea = 0.16;
-    d.aero.rearDownforceArea = 0.26;
+    d.aero.frontDownforceArea = 0.15;   // more at the rear: planted at high speed (the same
+    d.aero.rearDownforceArea = 0.31;    // downforce on a lighter car matters more)
+    return d;
+}
+
+VehicleDefinition rosserStellaV8Manuale() {
+    // The same car with a six-speed gated manual (open gate, single dry clutch) instead of the
+    // seven-speed dual clutch: longer ratios, a heavier flywheel, and shifts that open the clutch
+    // (a ~0.3 s torque gap) instead of handing over clutch to clutch.
+    VehicleDefinition d = rosserStellaV8();
+    d.name = "Rosser Stella V8 Manuale";
+    d.drivetrain.engine.inertia = 0.13;   // a heavier flywheel and single dry clutch
+    d.drivetrain.clutch.maxTorque = 800;
+    d.drivetrain.gearbox.forwardRatios = {3.08, 2.06, 1.52, 1.19, 0.97, 0.80};
+    d.drivetrain.gearbox.reverseRatio = 3.1;
+    d.drivetrain.gearbox.shiftTime = 0.30;
+    d.drivetrain.gearbox.kind = TransmissionKind::ManualHPattern;
+    d.drivetrain.gearbox.upshift = UpshiftControl::LiftAndRamp;
     return d;
 }
 

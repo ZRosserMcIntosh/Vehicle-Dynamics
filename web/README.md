@@ -17,7 +17,8 @@ becomes `ord.mjs` and exposes the identical `_ord_*` / `HEAPF64` interface.
 Cars (`ord_create` index): 0 Sports RWD, 1 Hatch FWD, 2 Saloon AWD, 3 Hypercar AWD, 4 Race car,
 5 Rosser Stella V8 (flat-plane V8, 9,000 rpm; the São Paulo World game's own car), and approximations of real
 cars from published figures (`src/vehicles/production_vehicles.hpp`): 6 Porsche 911 Carrera S, 7 911 Carrera 4S,
-8 Mercedes-AMG S 63 4MATIC+, 9 Mercedes-Benz S 600 Guard, 10 Formula 1 car (2026 regulations).
+8 Mercedes-AMG S 63 4MATIC+, 9 Mercedes-Benz S 600 Guard, 10 Formula 1 car (2026 regulations),
+11 Rosser Stella V8 Manuale (the same car with a six-speed gated manual).
 
 The proving ground (bump lane heights, wet and rough patches) is defined in `ord_web.cpp`
 (including the default-start proving ground west of the drag strip: graded bump course, split-mu lane,
@@ -42,6 +43,7 @@ and exported (`ord_ground_height`), so the page draws exactly the surface the ph
 | 27–30 | steer/throttle/brake input, ground queries | 14–15 | ESC brake torque, surface id |
 | 31 | largest impact speed this frame (m/s, city world) | | |
 | 32–35 | drift assist active, target sideslip (rad), throttle cut, steering change (rad) | 16 | grip used (0 = none, ~1 = at the limit) |
+| | | 17 | brake disc surface temperature (deg C; ambient on cars without the brake thermal model) |
 | 36–38 | upright (body z · world z: 1 upright, −1 on the roof), body hull points touching the ground, their total normal force (N) | | |
 
 `ord_set_tuning(steerLock, diffType, preload, powerRamp, coastRamp)` sets the steering lock (rad,
@@ -225,3 +227,15 @@ structure with it), and its forward speed at `speed` m/s (0: its own speed). The
 restraint, as on a real rolling road, so the engine and drag do not change it; the tyres, the
 suspension and the aero run at full physics. A cross wind (`ord_set_wind`) sets the yaw. Calling
 it again while on only changes the speed; `ord_tunnel(0, 0)` releases the car.
+
+`ord_traffic_buffer(n)`: traffic cars as moving boxes the player's car collides with. The page
+writes n cars (at most 128) of `ord_traffic_stride()` = 12 doubles each: x, y, heading (rad),
+vx, vy (m/s), yaw rate (rad/s), length, width, height (m), mass (kg), mode (0 driven by the page,
+1 loose), and hit (largest closing speed since the page last cleared it, m/s). Each physics step
+moves them on at their velocity and resolves contacts with the player's car as a two-body impulse
+(the player's car with its full mass and inertia, the traffic car as a box in the ground plane;
+restitution 0.1, friction 0.3), and reports hits harder than 1 m/s through `ord_hit_events`. A car
+that is touched switches to mode 1: it slides on, its tyres scrubbing it to a stop at ~0.8 g, and
+the page should leave it to the physics. `ord_traffic_buffer(0)` removes the traffic. Traffic
+cars do not collide with walls or with each other, the bikes do not hit them, and in the
+Realistic damage mode they push the car without crushing its crash structure.

@@ -65,6 +65,15 @@ struct DifferentialDef {
 
 enum class TransmissionKind { Automatic, Sequential, DualClutch, ManualHPattern };
 
+// How the auto clutch handles an upshift (the gearbox controller's strategy, or the driver's).
+//  Snap:       the clutch closes again as soon as the shift time is up (the original behaviour).
+//  PowerShift: a dual-clutch box: the oncoming clutch carries the torque the tyres carried
+//              before the shift, the ignition retards until the engine is down to the new gear's
+//              speed, then the clutch locks over ~80 ms. No flywheel dump into the tyres.
+//  LiftAndRamp: a manual: the driver lifts and dips the clutch for the shift (a torque gap),
+//              then lets it out as the revs come down to the new gear.
+enum class UpshiftControl { Snap, PowerShift, LiftAndRamp };
+
 struct GearboxDef {
     std::vector<Real> forwardRatios{3.6, 2.2, 1.5, 1.15, 0.92, 0.76};
     Real reverseRatio = 3.4;
@@ -72,6 +81,7 @@ struct GearboxDef {
     Real efficiency = 0.93;     // applied to positive drive torque
     Real shiftTime = 0.25;      // s, torque interruption for a shift
     TransmissionKind kind = TransmissionKind::Automatic;
+    UpshiftControl upshift = UpshiftControl::Snap;
 };
 
 struct ClutchDef {

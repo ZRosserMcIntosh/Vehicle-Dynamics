@@ -32,6 +32,7 @@ struct WheelTelemetry {
     Real gripUsed = 0;       // |(fx / (muX Fz), fy / (muY Fz))|: 0 = no force, ~1 = at the limit
     Real camber = 0;         // rad, to the road, usual sign (negative = top leaning toward the car)
     Real temperature = 0;    // deg C, tread (thermal model; ambient otherwise)
+    Real brakeTemperature = 0;  // deg C, brake disc surface (brake thermal model; ambient otherwise)
     Real steerAngle = 0;     // rad, this wheel
     Real brakeTorque = 0;    // N*m commanded
     bool brakeLocked = false;

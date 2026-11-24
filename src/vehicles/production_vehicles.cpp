@@ -50,6 +50,12 @@ VehicleDefinition porsche911Base(Real mass, Real frontShare) {
     f.suspension.reboundDamping = 4500;
     f.maxSteerAngle = 0.50;           // est. from the 11.2 m turning circle (published)
     f.maxBrakeTorque = 3400;          // 408 mm front discs (published), torque est.
+    // Cast-iron discs (thermal model: heavier and slower to heat than carbon-ceramics, fade earlier)
+    f.brakeSurfaceMass = 900;
+    f.brakeBulkMass = 9000;
+    f.brakeFadeStart = 600;
+    f.brakeFadeEnd = 800;
+    f.brakeFadeMin = 0.45;
     // MacPherson strut front (published layout); representative geometry with a little anti-dive.
     f.suspension.linkage = makeMacPherson(0.38, 0.58, 0.07, 0.10);
     WheelDef r = f;
@@ -62,6 +68,8 @@ VehicleDefinition porsche911Base(Real mass, Real frontShare) {
     r.suspension.reboundDamping = 5600;
     r.maxSteerAngle = 0;              // optional rear-axle steering not modelled
     r.maxBrakeTorque = 2000;          // 380 mm rear discs (published), torque est.
+    r.brakeSurfaceMass = 750;
+    r.brakeBulkMass = 7500;
     r.handbrakeTorque = 1600;
     // Wheelbase 2.450 m, tracks 1.601 / 1.555 m (published); weight split est. (~38/62).
     addCorners(d, 2.450, frontShare, 1.601, 1.555, -0.02, f, r);
@@ -149,6 +157,12 @@ VehicleDefinition mercedesAmgS63() {
     f.suspension.reboundDamping = 5600;
     f.maxSteerAngle = 0.54;           // est. from a ~12.3 m turning circle
     f.maxBrakeTorque = 3800;          // 390 mm front discs (published), torque est.
+    // cast-iron discs (thermal model)
+    f.brakeSurfaceMass = 950;
+    f.brakeBulkMass = 10000;
+    f.brakeFadeStart = 600;
+    f.brakeFadeEnd = 800;
+    f.brakeFadeMin = 0.45;
     // Four-link front and multilink rear (published layouts), both approximated as double
     // wishbones with representative geometry: long arms, moderate camber gain.
     f.suspension.linkage = makeDoubleWishbone(0.42, 0.32, 0.32, 0.06, 0.12, 0.50);
@@ -158,6 +172,8 @@ VehicleDefinition mercedesAmgS63() {
     r.suspension.linkage = makeDoubleWishbone(0.45, 0.34, 0.30, 0.04, -0.08, 0.60);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 2400;          // 360 mm rear discs (published), torque est.
+    r.brakeSurfaceMass = 800;
+    r.brakeBulkMass = 8000;
     r.handbrakeTorque = 1500;
     // Wheelbase 3.165 m, tracks 1.643 m (published).
     addCorners(d, 3.165, frontShare, 1.643, 1.643, -0.11, f, r);
@@ -218,6 +234,12 @@ VehicleDefinition mercedesS600Guard() {
     f.suspension.reboundDamping = 13000;
     f.maxSteerAngle = 0.52;
     f.maxBrakeTorque = 6200;         // six-piston front calipers, larger discs (published), torque est.
+    // big cast-iron discs stopping 4.2 t (thermal model): they get hot
+    f.brakeSurfaceMass = 1300;
+    f.brakeBulkMass = 14000;
+    f.brakeFadeStart = 600;
+    f.brakeFadeEnd = 800;
+    f.brakeFadeMin = 0.45;
     f.suspension.linkage = makeDoubleWishbone(0.42, 0.32, 0.32, 0.06, 0.12, 0.50);  // W222 platform, as the S 63
     WheelDef r = f;
     r.tire = generateTireParams({255, 45, 19, TireCategory::Touring, cornerLoad(d.mass, 1 - frontShare)});
@@ -226,6 +248,8 @@ VehicleDefinition mercedesS600Guard() {
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 3800;
     r.handbrakeTorque = 2500;
+    r.brakeSurfaceMass = 1100;
+    r.brakeBulkMass = 11000;
     // long wheelbase 3.165 m (published); tracks as the W222 (est.)
     addCorners(d, 3.165, frontShare, 1.625, 1.635, -0.18, f, r);
     d.axles = {{0, 1, 60000}, {2, 3, 35000}};
@@ -274,6 +298,14 @@ VehicleDefinition formula1Car2026() {
     f.suspension.bumpStopRate = 1500000;
     f.maxSteerAngle = 0.30;
     f.maxBrakeTorque = 4500;         // carbon brakes (est.)
+    // Carbon-carbon discs: tiny and light, they work at 400-1,000 C and glow on every big stop
+    f.brakeSurfaceMass = 140;
+    f.brakeBulkMass = 1400;
+    f.brakeConduction = 120;
+    f.brakeCoolingPerSpeed = 6.0;    // ducted
+    f.brakeFadeStart = 1150;
+    f.brakeFadeEnd = 1350;
+    f.brakeFadeMin = 0.5;
     // Double wishbones with long, nearly parallel arms (little camber change over the short
     // travel) and the spring reached through a pushrod from the upright (regulated layout).
     f.suspension.linkage = makeDoubleWishbone(0.55, 0.50, 0.26, 0.03, 0.05, 0.90);
@@ -284,6 +316,8 @@ VehicleDefinition formula1Car2026() {
     r.suspension.linkage = makeDoubleWishbone(0.55, 0.50, 0.26, 0.03, -0.03, 0.90);
     r.maxSteerAngle = 0;
     r.maxBrakeTorque = 3000;
+    r.brakeSurfaceMass = 120;
+    r.brakeBulkMass = 1200;
     // Wheelbase 3.4 m max, 1.9 m overall width (published); tracks est.
     addCorners(d, 3.40, frontShare, 1.60, 1.55, 0.08, f, r);
     d.axles = {{0, 1, 120000}, {2, 3, 80000}};

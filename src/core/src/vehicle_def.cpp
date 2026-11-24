@@ -91,6 +91,9 @@ std::string VehicleDefinition::validate() const {
         if (!inRange(w.tire.wetGrip, 0, 3) || !inRange(w.tire.looseGrip, 0, 3) || !inRange(w.tire.aquaplaneSensitivity, 0, 20))
             return id + "tyre compound factors out of range";
         if (!inRange(w.maxBrakeTorque, 0, 1e6) || !inRange(w.handbrakeTorque, 0, 1e6)) return id + "brake torque must be within 0..1e6 N*m";
+        if (w.brakeSurfaceMass > 0 && (!inRange(w.brakeBulkMass, 1, 1e6) || !inRange(w.brakeConduction, 0, 1e5) || !inRange(w.brakeFadeMin, 0.05, 1) ||
+                                       w.brakeFadeEnd <= w.brakeFadeStart || !inRange(w.brakeCooling, 0, 1e4) || !inRange(w.brakeCoolingPerSpeed, 0, 1e4)))
+            return id + "brake thermal model: bulk mass 1..1e6 J/K, fade end above fade start, fade minimum 0.05..1";
         if (!inRange(w.unsprungMass, 0, 10000)) return id + "unsprungMass must be within 0..10000 kg";
     }
     for (std::size_t a = 0; a < axles.size(); ++a) {
