@@ -397,6 +397,7 @@ Car* car(int h) {
 VehicleFidelity fidelityFor(int f) {
     VehicleFidelity v = f <= 0 ? VehicleFidelity::lod0() : VehicleFidelity::lod1();
     if (f == 0) v.envelopeProbes = 0;  // smooth roads: the patch is enough, probes cost rays
+    v.telemetry = true;                // the page draws every car's wheels from it
     return v;
 }
 
