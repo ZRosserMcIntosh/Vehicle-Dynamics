@@ -68,3 +68,14 @@ jobs:
         run: sh web/build.sh
       - name: Smoke test in Node
         run: node web/smoke_test.mjs
+
+  wasm-gsp:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wasi-sdk 25
+        run: curl -sSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz | tar xz -C "$RUNNER_TEMP"
+      - name: Build the many-vehicle host module (gsp.wasm)
+        run: WASI_SDK="$RUNNER_TEMP/wasi-sdk-25.0-x86_64-linux" sh web/build_gsp_wasi.sh
+      - name: Smoke test in Node
+        run: node web/gsp_smoke_test.mjs

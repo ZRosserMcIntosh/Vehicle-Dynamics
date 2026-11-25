@@ -239,3 +239,35 @@ that is touched switches to mode 1: it slides on, its tyres scrubbing it to a st
 the page should leave it to the physics. `ord_traffic_buffer(0)` removes the traffic. Traffic
 cars do not collide with walls or with each other, the bikes do not hit them, and in the
 Realistic damage mode they push the car without crushing its crash structure.
+
+## Many cars in a host world (`gsp_web.cpp`)
+
+`gsp_web.cpp` is a second C ABI, for pages where the page's own rigid-body engine is the host:
+[Georgia State Pursuit](https://zrossermcintosh.com/gsp/) runs every car (player, suspect,
+police, traffic) in `ChassisMode::External` inside a Rapier world, which owns the chassis and
+all car-to-car, barrier and prop contacts. Build it with
+`WASI_SDK=/path/to/wasi-sdk web/build_gsp_wasi.sh` (→ `gsp.wasm` + `gsp.mjs`) and check it
+with `node web/gsp_smoke_test.mjs`, which stands in a minimal host integrator for Rapier.
+
+Each host step, per car: `gsp_set_body(h, pose, CoM velocity, angular velocity)` (what the host
+integrated), `gsp_set_input(h, …)`, `gsp_step(h, dt, substeps)` (vehicle-local substeps), then
+apply `gsp_forces(h)` (average force and torque about the CoM over `dt`, world frame, gravity
+excluded) to the host body. The body origin is the centre of mass.
+
+- Cars are built from a flat parameter block, `gsp_params()` (`GSP_*` indices in the source:
+  mass, inertia, wheelbase, weight split, tracks, CoM height, tyre radius and grip, springs,
+  dampers, anti-roll bars, steering lock, brakes, driveline, gearbox, torque curve, drag, body
+  hull). `gsp_create(x, y, zHint, yaw, speed, fidelity)` places a car on the ground, at rest or
+  rolling; `gsp_rebuild(h)` rebuilds one in place from new parameters, keeping its motion.
+- Ground: `gsp_ground_alloc(nx, ny, x0, y0, cell)` returns float heights to fill,
+  `gsp_ground_classes()` a surface class per cell; `gsp_set_surface(class, …)` sets each class's
+  grip, rolling resistance, looseness, micro-texture, wet grip loss and whether rain pools on it;
+  `gsp_add_deck(…)` adds flat elevated decks (a bridge over a road: cars under it see the road).
+- `gsp_set_weather(rain, puddles)`, `gsp_puddles(x, y, r)` + `gsp_puddle_buffer()` for drawing them.
+- Assists per car: `gsp_set_preset`, `gsp_set_aids`, `gsp_set_steering` (steering mode, shaping,
+  rates, countersteer and drift assist).
+- `gsp_state(h)`: a 50-value header (pose, speed, lateral velocity, yaw rate, sideslip, body
+  accelerations, rpm, gear, assists, upright, body hull contacts, host-sync error, CoM and angular
+  velocity) then 18 values per wheel (as `ord_state`, with suspension compression as a fraction of
+  travel at 14). `gsp_body_info(h)` gives mass, inertia, the body box and the hardpoints for the
+  host's collider.
